@@ -42,7 +42,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
-  padding: 4rem 0 0 0;
+  padding: 3.5rem 0 0 0;
 
   @include media-breakpoint-down(xs) {
     @media (orientation: portrait) {
@@ -59,6 +59,120 @@ code,
 
 dd {
   white-space: pre-line;
+}
+
+.filter-menu {
+  right: 0;
+  top: 3.4rem;
+  z-index: 1000;
+  position: fixed;
+  height: 100%;
+  min-height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  transition: all .5s ease;
+  width: 300px;
+  background: #30404d;
+  color: #d5d5d5;
+}
+
+.filter-menu-divider {
+  position: absolute;
+  left: 0;
+  z-index: 1000;
+  height: 100%;
+  width: 15px;
+  top: 0px;
+  background: #25313a;
+}
+
+@media (min-width: 1200px) {
+  .filter-menu-divider button {
+      border: 0;
+      font-size: 10px;
+      font-weight: 800;
+      height: 100%;
+      line-height: 100%;
+      padding: 0;
+      text-align: center;
+      width: 100%;
+      background-color: #27343e;
+  }
+}
+
+.filter-row select {
+  width: 100%;
+  text-align: center;
+  vertical-align: middle;
+  margin: 0!important;
+}
+
+.filter-header {
+  width: 285px;
+  background-color: #27343e;
+  height: 3.2rem;
+  text-align: center;
+  vertical-align: middle;
+  padding: .7rem 0;
+  font-weight: 500;
+  font-size: 1.1rem;
+}
+
+.filter-row {
+  margin: .5rem 1rem!important;
+}
+
+.mr-2.mb-1.filter-row.dropdown.btn-group .dropdown-toggle {
+  padding-left: 3rem;
+}
+
+.mr-2.mb-1.filter-row.dropdown.btn-group > button {
+  width: auto;
+}
+
+.filter-row .input-group-prepend,
+.filter-row .dropdown-menu.show,
+.filter-row .btn.btn-secondary,
+.filter-row .btn.btn-danger,
+.filter-row .btn-group,
+.filter-row .dropdown {
+  width: 100%;
+}
+
+.btn-toolbar .tag-item.badge.badge-secondary {
+  width: 100%;
+  margin: .5rem 1rem!important;
+  height: 2rem;
+  padding: 5px 0;
+  font-size: 1rem;
+}
+
+.btn-toolbar .tag-item.badge.badge-secondary button {
+  height: 1.4rem;
+  width: 1.5rem;
+}
+
+.align-items-center.justify-content-center.mb-2.btn-toolbar {
+  display: grid;
+  padding-left: 15px;
+}
+
+.query-text-field.bg-secondary.text-white.border-secondary.form-control {
+  background-color: #30404d!important;
+  border-bottom: 1px solid #2d3035;
+  background: rgba(0,0,0,0);
+  margin: 1rem;
+}
+
+.btn-secondary.mx-1.mb-1.form-control {
+  width: 100%;
+  text-align: center;
+  vertical-align: middle;
+  margin: 0!important;
+}
+
+.content-menu {
+  padding-right: 300px;
+  padding-top: 1rem;
 }
 
 .input-control,

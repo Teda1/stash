@@ -134,7 +134,7 @@ export const ListViewOptions: React.FC<IListViewOptionsProps> = ({
   function maybeRenderZoom() {
     if (onSetZoom && displayMode === DisplayMode.Grid) {
       return (
-        <div className="align-middle">
+        <div className="align-middle filter-row">
           <Form.Control
             className="zoom-slider d-none d-sm-inline-flex ml-3"
             type="range"
@@ -152,7 +152,8 @@ export const ListViewOptions: React.FC<IListViewOptionsProps> = ({
 
   return (
     <>
-      <ButtonGroup>{maybeRenderDisplayModeOptions()}</ButtonGroup>
+      <div className="filter-header">View Options</div>
+      <ButtonGroup className="filter-row">{maybeRenderDisplayModeOptions()}</ButtonGroup>
       {maybeRenderZoom()}
     </>
   );

@@ -22,11 +22,12 @@
 }
 
 input[type="range"].zoom-slider {
-  height: 100%;
+  // height: 100%;
   margin: 0;
-  max-width: 60px;
+  max-width: 250px;
   padding-left: 0;
   padding-right: 0;
+  margin-left: 0rem!important;
 }
 
 .query-text-field {

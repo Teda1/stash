@@ -95,7 +95,7 @@ export const ListOperationButtons: React.FC<IListOperationButtonsProps> = ({
 
     if (buttons.length > 0) {
       return (
-        <ButtonGroup className="ml-2 mb-1">
+        <ButtonGroup className="ml-2 mb-1 filter-row">
           {buttons.map((button) => {
             return (
               <OverlayTrigger
@@ -185,9 +185,10 @@ export const ListOperationButtons: React.FC<IListOperationButtonsProps> = ({
 
   return (
     <>
+      <div className="filter-header">Operations</div>
       {maybeRenderButtons()}
 
-      <div className="mx-2">{renderMore()}</div>
+      <div className="mx-2 filter-row">{renderMore()}</div>
     </>
   );
 };

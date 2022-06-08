@@ -490,63 +490,72 @@ const RenderList = <
 
   const content = (
     <div>
-      <ButtonToolbar className="align-items-center justify-content-center mb-2">
-        <ListFilter
-          onFilterUpdate={updateQueryParams}
-          filter={filter}
-          filterOptions={filterOptions}
-          openFilterDialog={() => setNewCriterion(true)}
-          filterDialogOpen={newCriterion ?? editingCriterion}
-          persistState={persistState}
-        />
-        <ListOperationButtons
-          onSelectAll={selectable ? onSelectAll : undefined}
-          onSelectNone={selectable ? onSelectNone : undefined}
-          otherOperations={operations}
-          itemsSelected={selectedIds.size > 0}
-          onEdit={renderEditDialog ? onEdit : undefined}
-          onDelete={renderDeleteDialog ? onDelete : undefined}
-        />
-        <ListViewOptions
-          displayMode={filter.displayMode}
-          displayModeOptions={filterOptions.displayModeOptions}
-          onSetDisplayMode={onChangeDisplayMode}
-          zoomIndex={zoomable ? filter.zoomIndex : undefined}
-          onSetZoom={zoomable ? onChangeZoom : undefined}
-        />
-      </ButtonToolbar>
-      <FilterTags
-        criteria={filter.criteria}
-        onEditCriterion={(c) => setEditingCriterion(c)}
-        onRemoveCriterion={onRemoveCriterion}
-      />
-      {(newCriterion || editingCriterion) && !filterDialog && (
-        <AddFilterDialog
-          filterOptions={filterOptions}
-          onAddCriterion={onAddCriterion}
-          onCancel={onCancelAddCriterion}
-          editingCriterion={editingCriterion}
-          existingCriterions={filter.criteria}
-        />
-      )}
-      {newCriterion &&
-        filterDialog &&
-        filterDialog(filter.criteria, (c) => updateCriteria(c))}
-      {isEditDialogOpen &&
-        renderEditDialog &&
-        renderEditDialog(
-          getSelectedData(getData(result), selectedIds),
-          (applied) => onEditDialogClosed(applied)
+      <div className="filter-menu">
+        <div>
+          <div className="filter-menu-divider">
+            <button type="button" className="btn btn-primary">&gt;</button>
+          </div>
+          <ButtonToolbar className="align-items-center justify-content-center mb-2">
+          <ListViewOptions
+            displayMode={filter.displayMode}
+            displayModeOptions={filterOptions.displayModeOptions}
+            onSetDisplayMode={onChangeDisplayMode}
+            zoomIndex={zoomable ? filter.zoomIndex : undefined}
+            onSetZoom={zoomable ? onChangeZoom : undefined}
+          />
+          <ListFilter
+            onFilterUpdate={updateQueryParams}
+            filter={filter}
+            filterOptions={filterOptions}
+            openFilterDialog={() => setNewCriterion(true)}
+            filterDialogOpen={newCriterion ?? editingCriterion}
+            persistState={persistState}
+          />
+          <ListOperationButtons
+            onSelectAll={selectable ? onSelectAll : undefined}
+            onSelectNone={selectable ? onSelectNone : undefined}
+            otherOperations={operations}
+            itemsSelected={selectedIds.size > 0}
+            onEdit={renderEditDialog ? onEdit : undefined}
+            onDelete={renderDeleteDialog ? onDelete : undefined}
+          />
+          <FilterTags
+            criteria={filter.criteria}
+            onEditCriterion={(c) => setEditingCriterion(c)}
+            onRemoveCriterion={onRemoveCriterion}
+          />
+        </ButtonToolbar>
+        {(newCriterion || editingCriterion) && !filterDialog && (
+          <AddFilterDialog
+            filterOptions={filterOptions}
+            onAddCriterion={onAddCriterion}
+            onCancel={onCancelAddCriterion}
+            editingCriterion={editingCriterion}
+            existingCriterions={filter.criteria}
+          />
         )}
-      {isDeleteDialogOpen &&
-        renderDeleteDialog &&
-        renderDeleteDialog(
-          getSelectedData(getData(result), selectedIds),
-          (deleted) => onDeleteDialogClosed(deleted)
-        )}
-      {result.loading ? <LoadingIndicator /> : undefined}
-      {result.error ? <h1>{result.error.message}</h1> : undefined}
-      {maybeRenderContent()}
+        {newCriterion &&
+          filterDialog &&
+          filterDialog(filter.criteria, (c) => updateCriteria(c))}
+        {isEditDialogOpen &&
+          renderEditDialog &&
+          renderEditDialog(
+            getSelectedData(getData(result), selectedIds),
+            (applied) => onEditDialogClosed(applied)
+          )}
+        {isDeleteDialogOpen &&
+          renderDeleteDialog &&
+          renderDeleteDialog(
+            getSelectedData(getData(result), selectedIds),
+            (deleted) => onDeleteDialogClosed(deleted)
+          )}
+        </div>
+      </div>
+      <div className="content-menu">
+        {result.loading ? <LoadingIndicator /> : undefined}
+        {result.error ? <h1>{result.error.message}</h1> : undefined}
+        {maybeRenderContent()}
+      </div>
     </div>
   );
 

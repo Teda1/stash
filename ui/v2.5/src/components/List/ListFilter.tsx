@@ -207,28 +207,9 @@ export const ListFilter: React.FC<IListFilterProps> = ({
 
     return (
       <>
-        <div className="d-flex mb-1">
-          <InputGroup className="mr-2 flex-grow-1">
-            <InputGroup.Prepend>
-              <Dropdown>
-                <OverlayTrigger
-                  placement="top"
-                  overlay={
-                    <Tooltip id="filter-tooltip">
-                      <FormattedMessage id="search_filter.saved_filters" />
-                    </Tooltip>
-                  }
-                >
-                  <Dropdown.Toggle variant="secondary">
-                    <Icon icon="bookmark" />
-                  </Dropdown.Toggle>
-                </OverlayTrigger>
-                <Dropdown.Menu
-                  as={SavedFilterDropdown}
-                  className="saved-filter-list-menu"
-                />
-              </Dropdown>
-            </InputGroup.Prepend>
+        {/* <div className="d-flex mb-1">
+          <InputGroup className="mr-2 flex-grow-1"> */}
+            <div className="filter-header">Filter Options</div>
             <FormControl
               ref={queryRef}
               placeholder={`${intl.formatMessage({ id: "actions.search" })}…`}
@@ -247,32 +228,14 @@ export const ListFilter: React.FC<IListFilterProps> = ({
             >
               <Icon icon="times" />
             </Button>
-            <InputGroup.Append>
-              <OverlayTrigger
-                placement="top"
-                overlay={
-                  <Tooltip id="filter-tooltip">
-                    <FormattedMessage id="search_filter.name" />
-                  </Tooltip>
-                }
-              >
-                <Button
-                  variant="secondary"
-                  onClick={() => openFilterDialog()}
-                  active={filterDialogOpen}
-                >
-                  <Icon icon="filter" />
-                </Button>
-              </OverlayTrigger>
-            </InputGroup.Append>
-          </InputGroup>
-        </div>
-
-        <Dropdown as={ButtonGroup} className="mr-2 mb-1">
+          {/* </InputGroup>
+        </div> */}
+      
+        <Dropdown as={ButtonGroup} className="mr-2 mb-1 filter-row">
           <InputGroup.Prepend>
             <Dropdown.Toggle variant="secondary">
               {currentSortBy
-                ? intl.formatMessage({ id: currentSortBy.messageID })
+                ? "Sort By: "+intl.formatMessage({ id: currentSortBy.messageID })
                 : ""}
             </Dropdown.Toggle>
           </InputGroup.Prepend>
@@ -313,7 +276,7 @@ export const ListFilter: React.FC<IListFilterProps> = ({
           )}
         </Dropdown>
 
-        <div>
+        <div  className="filter-row">
           <Form.Control
             as="select"
             ref={perPageSelect}
@@ -323,7 +286,7 @@ export const ListFilter: React.FC<IListFilterProps> = ({
           >
             {pageSizeOptions.map((s) => (
               <option value={s.value} key={s.value}>
-                {s.label}
+                {s.label+" Items Per Page"}
               </option>
             ))}
           </Form.Control>
@@ -371,6 +334,47 @@ export const ListFilter: React.FC<IListFilterProps> = ({
             </Popover>
           </Overlay>
         </div>
+
+        <InputGroup.Append className="d-flex mb-1 filter-row">
+              <OverlayTrigger
+                placement="top"
+                overlay={
+                  <Tooltip id="filter-tooltip">
+                    <FormattedMessage id="search_filter.name" />
+                  </Tooltip>
+                }
+              >
+                <Button
+                  variant="secondary"
+                  onClick={() => openFilterDialog()}
+                  active={filterDialogOpen}
+                >
+                  <Icon icon="filter" />
+                  <span>Add Filter</span>
+                </Button>
+              </OverlayTrigger>
+            </InputGroup.Append>
+            <InputGroup.Prepend className="d-flex mb-1  filter-row">
+              <Dropdown>
+                <OverlayTrigger
+                  placement="top"
+                  overlay={
+                    <Tooltip id="filter-tooltip">
+                      <FormattedMessage id="search_filter.saved_filters" />
+                    </Tooltip>
+                  }
+                >
+                  <Dropdown.Toggle variant="secondary">
+                    <Icon icon="bookmark" />
+                    <span>Saved Filters</span>
+                  </Dropdown.Toggle>
+                </OverlayTrigger>
+                <Dropdown.Menu
+                  as={SavedFilterDropdown}
+                  className="saved-filter-list-menu"
+                />
+              </Dropdown>
+            </InputGroup.Prepend>
       </>
     );
   }
