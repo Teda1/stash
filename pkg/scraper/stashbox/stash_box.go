@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -14,30 +13,65 @@ import (
 	"strings"
 
 	"github.com/Yamashou/gqlgenc/client"
-	"github.com/corona10/goimagehash"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
 	"github.com/Yamashou/gqlgenc/graphqljson"
+	"github.com/stashapp/stash/pkg/file"
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/match"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/scraper"
 	"github.com/stashapp/stash/pkg/scraper/stashbox/graphql"
-	"github.com/stashapp/stash/pkg/sliceutil/intslice"
 	"github.com/stashapp/stash/pkg/sliceutil/stringslice"
+	"github.com/stashapp/stash/pkg/studio"
+	"github.com/stashapp/stash/pkg/tag"
+	"github.com/stashapp/stash/pkg/txn"
 	"github.com/stashapp/stash/pkg/utils"
 )
+
+type SceneReader interface {
+	Find(ctx context.Context, id int) (*models.Scene, error)
+	models.StashIDLoader
+	models.VideoFileLoader
+}
+
+type PerformerReader interface {
+	match.PerformerFinder
+	Find(ctx context.Context, id int) (*models.Performer, error)
+	FindBySceneID(ctx context.Context, sceneID int) ([]*models.Performer, error)
+	models.StashIDLoader
+	GetImage(ctx context.Context, performerID int) ([]byte, error)
+}
+
+type StudioReader interface {
+	match.StudioFinder
+	studio.Finder
+	models.StashIDLoader
+}
+type TagFinder interface {
+	tag.Queryer
+	FindBySceneID(ctx context.Context, sceneID int) ([]*models.Tag, error)
+}
+
+type Repository struct {
+	Scene     SceneReader
+	Performer PerformerReader
+	Tag       TagFinder
+	Studio    StudioReader
+}
 
 // Client represents the client interface to a stash-box server instance.
 type Client struct {
 	client     *graphql.Client
-	txnManager models.TransactionManager
+	txnManager txn.Manager
+	repository Repository
 	box        models.StashBox
 }
 
 // NewClient returns a new instance of a stash-box client.
-func NewClient(box models.StashBox, txnManager models.TransactionManager) *Client {
+func NewClient(box models.StashBox, txnManager txn.Manager, repo Repository) *Client {
 	authHeader := func(req *http.Request) {
 		req.Header.Set("ApiKey", box.APIKey)
 	}
@@ -49,6 +83,7 @@ func NewClient(box models.StashBox, txnManager models.TransactionManager) *Clien
 	return &Client{
 		client:     client,
 		txnManager: txnManager,
+		repository: repo,
 		box:        box,
 	}
 }
@@ -58,7 +93,7 @@ func (c Client) getHTTPClient() *http.Client {
 }
 
 // QueryStashBoxScene queries stash-box for scenes using a query string.
-func (c Client) QueryStashBoxScene(ctx context.Context, queryStr string) ([]*models.ScrapedScene, error) {
+func (c Client) QueryStashBoxScene(ctx context.Context, queryStr string) ([]*scraper.ScrapedScene, error) {
 	scenes, err := c.client.SearchScene(ctx, queryStr)
 	if err != nil {
 		return nil, err
@@ -66,7 +101,7 @@ func (c Client) QueryStashBoxScene(ctx context.Context, queryStr string) ([]*mod
 
 	sceneFragments := scenes.SearchScene
 
-	var ret []*models.ScrapedScene
+	var ret []*scraper.ScrapedScene
 	for _, s := range sceneFragments {
 		ss, err := c.sceneFragmentToScrapedScene(ctx, s)
 		if err != nil {
@@ -78,133 +113,27 @@ func (c Client) QueryStashBoxScene(ctx context.Context, queryStr string) ([]*mod
 	return ret, nil
 }
 
-func phashMatches(hash, other int64) bool {
-	// HACK - stash-box match distance is configurable. This needs to be fixed on
-	// the stash-box end.
-	const stashBoxDistance = 4
-
-	imageHash := goimagehash.NewImageHash(uint64(hash), goimagehash.PHash)
-	otherHash := goimagehash.NewImageHash(uint64(other), goimagehash.PHash)
-
-	distance, _ := imageHash.Distance(otherHash)
-	return distance <= stashBoxDistance
+// FindStashBoxScenesByFingerprints queries stash-box for a scene using the
+// scene's MD5/OSHASH checksum, or PHash.
+func (c Client) FindStashBoxSceneByFingerprints(ctx context.Context, sceneID int) ([]*scraper.ScrapedScene, error) {
+	res, err := c.FindStashBoxScenesByFingerprints(ctx, []int{sceneID})
+	if len(res) > 0 {
+		return res[0], err
+	}
+	return nil, err
 }
 
 // FindStashBoxScenesByFingerprints queries stash-box for scenes using every
 // scene's MD5/OSHASH checksum, or PHash, and returns results in the same order
 // as the input slice.
-func (c Client) FindStashBoxScenesByFingerprints(ctx context.Context, sceneIDs []string) ([][]*models.ScrapedScene, error) {
-	ids, err := stringslice.StringSliceToIntSlice(sceneIDs)
-	if err != nil {
-		return nil, err
-	}
+func (c Client) FindStashBoxScenesByFingerprints(ctx context.Context, ids []int) ([][]*scraper.ScrapedScene, error) {
+	var fingerprints [][]*graphql.FingerprintQueryInput
 
-	var fingerprints []*graphql.FingerprintQueryInput
-	// map fingerprints to their scene index
-	fpToScene := make(map[string][]int)
-	phashToScene := make(map[int64][]int)
-
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		qb := r.Scene()
-
-		for index, sceneID := range ids {
-			scene, err := qb.Find(sceneID)
-			if err != nil {
-				return err
-			}
-
-			if scene == nil {
-				return fmt.Errorf("scene with id %d not found", sceneID)
-			}
-
-			if scene.Checksum.Valid {
-				fingerprints = append(fingerprints, &graphql.FingerprintQueryInput{
-					Hash:      scene.Checksum.String,
-					Algorithm: graphql.FingerprintAlgorithmMd5,
-				})
-				fpToScene[scene.Checksum.String] = append(fpToScene[scene.Checksum.String], index)
-			}
-
-			if scene.OSHash.Valid {
-				fingerprints = append(fingerprints, &graphql.FingerprintQueryInput{
-					Hash:      scene.OSHash.String,
-					Algorithm: graphql.FingerprintAlgorithmOshash,
-				})
-				fpToScene[scene.OSHash.String] = append(fpToScene[scene.OSHash.String], index)
-			}
-
-			if scene.Phash.Valid {
-				phashStr := utils.PhashToString(scene.Phash.Int64)
-				fingerprints = append(fingerprints, &graphql.FingerprintQueryInput{
-					Hash:      phashStr,
-					Algorithm: graphql.FingerprintAlgorithmPhash,
-				})
-				fpToScene[phashStr] = append(fpToScene[phashStr], index)
-				phashToScene[scene.Phash.Int64] = append(phashToScene[scene.Phash.Int64], index)
-			}
-		}
-
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	allScenes, err := c.findStashBoxScenesByFingerprints(ctx, fingerprints)
-	if err != nil {
-		return nil, err
-	}
-
-	// set the matched scenes back in their original order
-	ret := make([][]*models.ScrapedScene, len(sceneIDs))
-	for _, s := range allScenes {
-		var addedTo []int
-
-		addScene := func(sceneIndexes []int) {
-			for _, index := range sceneIndexes {
-				if !intslice.IntInclude(addedTo, index) {
-					addedTo = append(addedTo, index)
-					ret[index] = append(ret[index], s)
-				}
-			}
-		}
-
-		for _, fp := range s.Fingerprints {
-			addScene(fpToScene[fp.Hash])
-
-			// HACK - we really need stash-box to return specific hash-to-result sets
-			if fp.Algorithm == graphql.FingerprintAlgorithmPhash.String() {
-				hash, err := utils.StringToPhash(fp.Hash)
-				if err != nil {
-					continue
-				}
-
-				for phash, sceneIndexes := range phashToScene {
-					if phashMatches(hash, phash) {
-						addScene(sceneIndexes)
-					}
-				}
-			}
-		}
-	}
-
-	return ret, nil
-}
-
-// FindStashBoxScenesByFingerprintsFlat queries stash-box for scenes using every
-// scene's MD5/OSHASH checksum, or PHash, and returns results a flat slice.
-func (c Client) FindStashBoxScenesByFingerprintsFlat(ctx context.Context, sceneIDs []string) ([]*models.ScrapedScene, error) {
-	ids, err := stringslice.StringSliceToIntSlice(sceneIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	var fingerprints []*graphql.FingerprintQueryInput
-
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		qb := r.Scene()
+	if err := txn.WithTxn(ctx, c.txnManager, func(ctx context.Context) error {
+		qb := c.repository.Scene
 
 		for _, sceneID := range ids {
-			scene, err := qb.Find(sceneID)
+			scene, err := qb.Find(ctx, sceneID)
 			if err != nil {
 				return err
 			}
@@ -213,26 +142,40 @@ func (c Client) FindStashBoxScenesByFingerprintsFlat(ctx context.Context, sceneI
 				return fmt.Errorf("scene with id %d not found", sceneID)
 			}
 
-			if scene.Checksum.Valid {
-				fingerprints = append(fingerprints, &graphql.FingerprintQueryInput{
-					Hash:      scene.Checksum.String,
-					Algorithm: graphql.FingerprintAlgorithmMd5,
-				})
+			if err := scene.LoadFiles(ctx, c.repository.Scene); err != nil {
+				return err
 			}
 
-			if scene.OSHash.Valid {
-				fingerprints = append(fingerprints, &graphql.FingerprintQueryInput{
-					Hash:      scene.OSHash.String,
-					Algorithm: graphql.FingerprintAlgorithmOshash,
-				})
+			var sceneFPs []*graphql.FingerprintQueryInput
+
+			for _, f := range scene.Files.List() {
+				checksum := f.Fingerprints.GetString(file.FingerprintTypeMD5)
+				if checksum != "" {
+					sceneFPs = append(sceneFPs, &graphql.FingerprintQueryInput{
+						Hash:      checksum,
+						Algorithm: graphql.FingerprintAlgorithmMd5,
+					})
+				}
+
+				oshash := f.Fingerprints.GetString(file.FingerprintTypeOshash)
+				if oshash != "" {
+					sceneFPs = append(sceneFPs, &graphql.FingerprintQueryInput{
+						Hash:      oshash,
+						Algorithm: graphql.FingerprintAlgorithmOshash,
+					})
+				}
+
+				phash := f.Fingerprints.GetInt64(file.FingerprintTypePhash)
+				if phash != 0 {
+					phashStr := utils.PhashToString(phash)
+					sceneFPs = append(sceneFPs, &graphql.FingerprintQueryInput{
+						Hash:      phashStr,
+						Algorithm: graphql.FingerprintAlgorithmPhash,
+					})
+				}
 			}
 
-			if scene.Phash.Valid {
-				fingerprints = append(fingerprints, &graphql.FingerprintQueryInput{
-					Hash:      utils.PhashToString(scene.Phash.Int64),
-					Algorithm: graphql.FingerprintAlgorithmPhash,
-				})
-			}
+			fingerprints = append(fingerprints, sceneFPs)
 		}
 
 		return nil
@@ -243,27 +186,29 @@ func (c Client) FindStashBoxScenesByFingerprintsFlat(ctx context.Context, sceneI
 	return c.findStashBoxScenesByFingerprints(ctx, fingerprints)
 }
 
-func (c Client) findStashBoxScenesByFingerprints(ctx context.Context, fingerprints []*graphql.FingerprintQueryInput) ([]*models.ScrapedScene, error) {
-	var ret []*models.ScrapedScene
-	for i := 0; i < len(fingerprints); i += 100 {
-		end := i + 100
-		if end > len(fingerprints) {
-			end = len(fingerprints)
+func (c Client) findStashBoxScenesByFingerprints(ctx context.Context, scenes [][]*graphql.FingerprintQueryInput) ([][]*scraper.ScrapedScene, error) {
+	var ret [][]*scraper.ScrapedScene
+	for i := 0; i < len(scenes); i += 40 {
+		end := i + 40
+		if end > len(scenes) {
+			end = len(scenes)
 		}
-		scenes, err := c.client.FindScenesByFullFingerprints(ctx, fingerprints[i:end])
+		scenes, err := c.client.FindScenesBySceneFingerprints(ctx, scenes[i:end])
 
 		if err != nil {
 			return nil, err
 		}
 
-		sceneFragments := scenes.FindScenesByFullFingerprints
-
-		for _, s := range sceneFragments {
-			ss, err := c.sceneFragmentToScrapedScene(ctx, s)
-			if err != nil {
-				return nil, err
+		for _, sceneFragments := range scenes.FindScenesBySceneFingerprints {
+			var sceneResults []*scraper.ScrapedScene
+			for _, scene := range sceneFragments {
+				ss, err := c.sceneFragmentToScrapedScene(ctx, scene)
+				if err != nil {
+					return nil, err
+				}
+				sceneResults = append(sceneResults, ss)
 			}
-			ret = append(ret, ss)
+			ret = append(ret, sceneResults)
 		}
 	}
 
@@ -278,11 +223,11 @@ func (c Client) SubmitStashBoxFingerprints(ctx context.Context, sceneIDs []strin
 
 	var fingerprints []graphql.FingerprintSubmission
 
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		qb := r.Scene()
+	if err := txn.WithTxn(ctx, c.txnManager, func(ctx context.Context) error {
+		qb := c.repository.Scene
 
 		for _, sceneID := range ids {
-			scene, err := qb.Find(sceneID)
+			scene, err := qb.Find(ctx, sceneID)
 			if err != nil {
 				return err
 			}
@@ -291,11 +236,15 @@ func (c Client) SubmitStashBoxFingerprints(ctx context.Context, sceneIDs []strin
 				continue
 			}
 
-			stashIDs, err := qb.GetStashIDs(sceneID)
-			if err != nil {
+			if err := scene.LoadStashIDs(ctx, qb); err != nil {
 				return err
 			}
 
+			if err := scene.LoadFiles(ctx, qb); err != nil {
+				return err
+			}
+
+			stashIDs := scene.StashIDs.List()
 			sceneStashID := ""
 			for _, stashID := range stashIDs {
 				if stashID.Endpoint == endpoint {
@@ -304,40 +253,46 @@ func (c Client) SubmitStashBoxFingerprints(ctx context.Context, sceneIDs []strin
 			}
 
 			if sceneStashID != "" {
-				if scene.Checksum.Valid && scene.Duration.Valid {
-					fingerprint := graphql.FingerprintInput{
-						Hash:      scene.Checksum.String,
-						Algorithm: graphql.FingerprintAlgorithmMd5,
-						Duration:  int(scene.Duration.Float64),
-					}
-					fingerprints = append(fingerprints, graphql.FingerprintSubmission{
-						SceneID:     sceneStashID,
-						Fingerprint: &fingerprint,
-					})
-				}
+				for _, f := range scene.Files.List() {
+					duration := f.Duration
 
-				if scene.OSHash.Valid && scene.Duration.Valid {
-					fingerprint := graphql.FingerprintInput{
-						Hash:      scene.OSHash.String,
-						Algorithm: graphql.FingerprintAlgorithmOshash,
-						Duration:  int(scene.Duration.Float64),
-					}
-					fingerprints = append(fingerprints, graphql.FingerprintSubmission{
-						SceneID:     sceneStashID,
-						Fingerprint: &fingerprint,
-					})
-				}
+					if duration != 0 {
+						if checksum := f.Fingerprints.GetString(file.FingerprintTypeMD5); checksum != "" {
+							fingerprint := graphql.FingerprintInput{
+								Hash:      checksum,
+								Algorithm: graphql.FingerprintAlgorithmMd5,
+								Duration:  int(duration),
+							}
+							fingerprints = append(fingerprints, graphql.FingerprintSubmission{
+								SceneID:     sceneStashID,
+								Fingerprint: &fingerprint,
+							})
+						}
 
-				if scene.Phash.Valid && scene.Duration.Valid {
-					fingerprint := graphql.FingerprintInput{
-						Hash:      utils.PhashToString(scene.Phash.Int64),
-						Algorithm: graphql.FingerprintAlgorithmPhash,
-						Duration:  int(scene.Duration.Float64),
+						if oshash := f.Fingerprints.GetString(file.FingerprintTypeOshash); oshash != "" {
+							fingerprint := graphql.FingerprintInput{
+								Hash:      oshash,
+								Algorithm: graphql.FingerprintAlgorithmOshash,
+								Duration:  int(duration),
+							}
+							fingerprints = append(fingerprints, graphql.FingerprintSubmission{
+								SceneID:     sceneStashID,
+								Fingerprint: &fingerprint,
+							})
+						}
+
+						if phash := f.Fingerprints.GetInt64(file.FingerprintTypePhash); phash != 0 {
+							fingerprint := graphql.FingerprintInput{
+								Hash:      utils.PhashToString(phash),
+								Algorithm: graphql.FingerprintAlgorithmPhash,
+								Duration:  int(duration),
+							}
+							fingerprints = append(fingerprints, graphql.FingerprintSubmission{
+								SceneID:     sceneStashID,
+								Fingerprint: &fingerprint,
+							})
+						}
 					}
-					fingerprints = append(fingerprints, graphql.FingerprintSubmission{
-						SceneID:     sceneStashID,
-						Fingerprint: &fingerprint,
-					})
 				}
 			}
 		}
@@ -362,10 +317,10 @@ func (c Client) submitStashBoxFingerprints(ctx context.Context, fingerprints []g
 }
 
 // QueryStashBoxPerformer queries stash-box for performers using a query string.
-func (c Client) QueryStashBoxPerformer(ctx context.Context, queryStr string) ([]*models.StashBoxPerformerQueryResult, error) {
+func (c Client) QueryStashBoxPerformer(ctx context.Context, queryStr string) ([]*StashBoxPerformerQueryResult, error) {
 	performers, err := c.queryStashBoxPerformer(ctx, queryStr)
 
-	res := []*models.StashBoxPerformerQueryResult{
+	res := []*StashBoxPerformerQueryResult{
 		{
 			Query:   queryStr,
 			Results: performers,
@@ -400,7 +355,7 @@ func (c Client) queryStashBoxPerformer(ctx context.Context, queryStr string) ([]
 }
 
 // FindStashBoxPerformersByNames queries stash-box for performers by name
-func (c Client) FindStashBoxPerformersByNames(ctx context.Context, performerIDs []string) ([]*models.StashBoxPerformerQueryResult, error) {
+func (c Client) FindStashBoxPerformersByNames(ctx context.Context, performerIDs []string) ([]*StashBoxPerformerQueryResult, error) {
 	ids, err := stringslice.StringSliceToIntSlice(performerIDs)
 	if err != nil {
 		return nil, err
@@ -408,11 +363,11 @@ func (c Client) FindStashBoxPerformersByNames(ctx context.Context, performerIDs 
 
 	var performers []*models.Performer
 
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		qb := r.Performer()
+	if err := txn.WithTxn(ctx, c.txnManager, func(ctx context.Context) error {
+		qb := c.repository.Performer
 
 		for _, performerID := range ids {
-			performer, err := qb.Find(performerID)
+			performer, err := qb.Find(ctx, performerID)
 			if err != nil {
 				return err
 			}
@@ -442,11 +397,11 @@ func (c Client) FindStashBoxPerformersByPerformerNames(ctx context.Context, perf
 
 	var performers []*models.Performer
 
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		qb := r.Performer()
+	if err := txn.WithTxn(ctx, c.txnManager, func(ctx context.Context) error {
+		qb := c.repository.Performer
 
 		for _, performerID := range ids {
-			performer, err := qb.Find(performerID)
+			performer, err := qb.Find(ctx, performerID)
 			if err != nil {
 				return err
 			}
@@ -478,8 +433,8 @@ func (c Client) FindStashBoxPerformersByPerformerNames(ctx context.Context, perf
 	return ret, nil
 }
 
-func (c Client) findStashBoxPerformersByNames(ctx context.Context, performers []*models.Performer) ([]*models.StashBoxPerformerQueryResult, error) {
-	var ret []*models.StashBoxPerformerQueryResult
+func (c Client) findStashBoxPerformersByNames(ctx context.Context, performers []*models.Performer) ([]*StashBoxPerformerQueryResult, error) {
+	var ret []*StashBoxPerformerQueryResult
 	for _, performer := range performers {
 		if performer.Name.Valid {
 			performerResults, err := c.queryStashBoxPerformer(ctx, performer.Name.String)
@@ -487,7 +442,7 @@ func (c Client) findStashBoxPerformersByNames(ctx context.Context, performers []
 				return nil, err
 			}
 
-			result := models.StashBoxPerformerQueryResult{
+			result := StashBoxPerformerQueryResult{
 				Query:   strconv.Itoa(performer.ID),
 				Results: performerResults,
 			}
@@ -703,9 +658,9 @@ func getFingerprints(scene *graphql.SceneFragment) []*models.StashBoxFingerprint
 	return fingerprints
 }
 
-func (c Client) sceneFragmentToScrapedScene(ctx context.Context, s *graphql.SceneFragment) (*models.ScrapedScene, error) {
+func (c Client) sceneFragmentToScrapedScene(ctx context.Context, s *graphql.SceneFragment) (*scraper.ScrapedScene, error) {
 	stashID := s.ID
-	ss := &models.ScrapedScene{
+	ss := &scraper.ScrapedScene{
 		Title:        s.Title,
 		Date:         s.Date,
 		Details:      s.Details,
@@ -723,9 +678,9 @@ func (c Client) sceneFragmentToScrapedScene(ctx context.Context, s *graphql.Scen
 		ss.Image = getFirstImage(ctx, c.getHTTPClient(), s.Images)
 	}
 
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		pqb := r.Performer()
-		tqb := r.Tag()
+	if err := txn.WithTxn(ctx, c.txnManager, func(ctx context.Context) error {
+		pqb := c.repository.Performer
+		tqb := c.repository.Tag
 
 		if s.Studio != nil {
 			studioID := s.Studio.ID
@@ -735,7 +690,7 @@ func (c Client) sceneFragmentToScrapedScene(ctx context.Context, s *graphql.Scen
 				RemoteSiteID: &studioID,
 			}
 
-			err := match.ScrapedStudio(r.Studio(), ss.Studio, &c.box.Endpoint)
+			err := match.ScrapedStudio(ctx, c.repository.Studio, ss.Studio, &c.box.Endpoint)
 			if err != nil {
 				return err
 			}
@@ -744,7 +699,7 @@ func (c Client) sceneFragmentToScrapedScene(ctx context.Context, s *graphql.Scen
 		for _, p := range s.Performers {
 			sp := performerFragmentToScrapedScenePerformer(p.Performer)
 
-			err := match.ScrapedPerformer(pqb, sp, &c.box.Endpoint)
+			err := match.ScrapedPerformer(ctx, pqb, sp, &c.box.Endpoint)
 			if err != nil {
 				return err
 			}
@@ -757,7 +712,7 @@ func (c Client) sceneFragmentToScrapedScene(ctx context.Context, s *graphql.Scen
 				Name: t.Name,
 			}
 
-			err := match.ScrapedTag(tqb, st)
+			err := match.ScrapedTag(ctx, tqb, st)
 			if err != nil {
 				return err
 			}
@@ -803,121 +758,131 @@ func (c Client) GetUser(ctx context.Context) (*graphql.Me, error) {
 	return c.client.Me(ctx)
 }
 
-func (c Client) SubmitSceneDraft(ctx context.Context, sceneID int, endpoint string, imagePath string) (*string, error) {
+func (c Client) SubmitSceneDraft(ctx context.Context, scene *models.Scene, endpoint string, imagePath string) (*string, error) {
 	draft := graphql.SceneDraftInput{}
-	var image *os.File
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		qb := r.Scene()
-		pqb := r.Performer()
-		sqb := r.Studio()
+	var image io.Reader
+	r := c.repository
+	pqb := r.Performer
+	sqb := r.Studio
 
-		scene, err := qb.Find(sceneID)
+	if scene.Title != "" {
+		draft.Title = &scene.Title
+	}
+	if scene.Details != "" {
+		draft.Details = &scene.Details
+	}
+	if scene.URL != "" && len(strings.TrimSpace(scene.URL)) > 0 {
+		url := strings.TrimSpace(scene.URL)
+		draft.URL = &url
+	}
+	if scene.Date != nil {
+		v := scene.Date.String()
+		draft.Date = &v
+	}
+
+	if scene.StudioID != nil {
+		studio, err := sqb.Find(ctx, int(*scene.StudioID))
 		if err != nil {
-			return err
+			return nil, err
+		}
+		studioDraft := graphql.DraftEntityInput{
+			Name: studio.Name.String,
 		}
 
-		if scene.Title.Valid {
-			draft.Title = &scene.Title.String
+		stashIDs, err := sqb.GetStashIDs(ctx, studio.ID)
+		if err != nil {
+			return nil, err
 		}
-		if scene.Details.Valid {
-			draft.Details = &scene.Details.String
+		for _, stashID := range stashIDs {
+			c := stashID
+			if stashID.Endpoint == endpoint {
+				studioDraft.ID = &c.StashID
+				break
+			}
 		}
-		if len(strings.TrimSpace(scene.URL.String)) > 0 {
-			url := strings.TrimSpace(scene.URL.String)
-			draft.URL = &url
-		}
-		if scene.Date.Valid {
-			draft.Date = &scene.Date.String
-		}
+		draft.Studio = &studioDraft
+	}
 
-		if scene.StudioID.Valid {
-			studio, err := sqb.Find(int(scene.StudioID.Int64))
-			if err != nil {
-				return err
-			}
-			studioDraft := graphql.DraftEntityInput{
-				Name: studio.Name.String,
-			}
+	fingerprints := []*graphql.FingerprintInput{}
 
-			stashIDs, err := sqb.GetStashIDs(studio.ID)
-			if err != nil {
-				return err
-			}
-			for _, stashID := range stashIDs {
-				if stashID.Endpoint == endpoint {
-					studioDraft.ID = &stashID.StashID
-					break
+	// submit all file fingerprints
+	if err := scene.LoadFiles(ctx, r.Scene); err != nil {
+		return nil, err
+	}
+
+	for _, f := range scene.Files.List() {
+		duration := f.Duration
+
+		if duration != 0 {
+			if oshash := f.Fingerprints.GetString(file.FingerprintTypeOshash); oshash != "" {
+				fingerprint := graphql.FingerprintInput{
+					Hash:      oshash,
+					Algorithm: graphql.FingerprintAlgorithmOshash,
+					Duration:  int(duration),
 				}
-			}
-			draft.Studio = &studioDraft
-		}
-
-		fingerprints := []*graphql.FingerprintInput{}
-		if scene.OSHash.Valid && scene.Duration.Valid {
-			fingerprint := graphql.FingerprintInput{
-				Hash:      scene.OSHash.String,
-				Algorithm: graphql.FingerprintAlgorithmOshash,
-				Duration:  int(scene.Duration.Float64),
-			}
-			fingerprints = append(fingerprints, &fingerprint)
-		}
-
-		if scene.Checksum.Valid && scene.Duration.Valid {
-			fingerprint := graphql.FingerprintInput{
-				Hash:      scene.Checksum.String,
-				Algorithm: graphql.FingerprintAlgorithmMd5,
-				Duration:  int(scene.Duration.Float64),
-			}
-			fingerprints = append(fingerprints, &fingerprint)
-		}
-
-		if scene.Phash.Valid && scene.Duration.Valid {
-			fingerprint := graphql.FingerprintInput{
-				Hash:      utils.PhashToString(scene.Phash.Int64),
-				Algorithm: graphql.FingerprintAlgorithmPhash,
-				Duration:  int(scene.Duration.Float64),
-			}
-			fingerprints = append(fingerprints, &fingerprint)
-		}
-		draft.Fingerprints = fingerprints
-
-		scenePerformers, err := pqb.FindBySceneID(sceneID)
-		if err != nil {
-			return err
-		}
-
-		performers := []*graphql.DraftEntityInput{}
-		for _, p := range scenePerformers {
-			performerDraft := graphql.DraftEntityInput{
-				Name: p.Name.String,
+				fingerprints = append(fingerprints, &fingerprint)
 			}
 
-			stashIDs, err := pqb.GetStashIDs(p.ID)
-			if err != nil {
-				return err
-			}
-
-			for _, stashID := range stashIDs {
-				if stashID.Endpoint == endpoint {
-					performerDraft.ID = &stashID.StashID
-					break
+			if checksum := f.Fingerprints.GetString(file.FingerprintTypeMD5); checksum != "" {
+				fingerprint := graphql.FingerprintInput{
+					Hash:      checksum,
+					Algorithm: graphql.FingerprintAlgorithmMd5,
+					Duration:  int(duration),
 				}
+				fingerprints = append(fingerprints, &fingerprint)
 			}
 
-			performers = append(performers, &performerDraft)
+			if phash := f.Fingerprints.GetInt64(file.FingerprintTypePhash); phash != 0 {
+				fingerprint := graphql.FingerprintInput{
+					Hash:      utils.PhashToString(phash),
+					Algorithm: graphql.FingerprintAlgorithmPhash,
+					Duration:  int(duration),
+				}
+				fingerprints = append(fingerprints, &fingerprint)
+			}
 		}
-		draft.Performers = performers
+	}
+	draft.Fingerprints = fingerprints
 
-		var tags []*graphql.DraftEntityInput
-		sceneTags, err := r.Tag().FindBySceneID(scene.ID)
+	scenePerformers, err := pqb.FindBySceneID(ctx, scene.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	performers := []*graphql.DraftEntityInput{}
+	for _, p := range scenePerformers {
+		performerDraft := graphql.DraftEntityInput{
+			Name: p.Name.String,
+		}
+
+		stashIDs, err := pqb.GetStashIDs(ctx, p.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		for _, tag := range sceneTags {
-			tags = append(tags, &graphql.DraftEntityInput{Name: tag.Name})
-		}
-		draft.Tags = tags
 
+		for _, stashID := range stashIDs {
+			c := stashID
+			if stashID.Endpoint == endpoint {
+				performerDraft.ID = &c.StashID
+				break
+			}
+		}
+
+		performers = append(performers, &performerDraft)
+	}
+	draft.Performers = performers
+
+	var tags []*graphql.DraftEntityInput
+	sceneTags, err := r.Tag.FindBySceneID(ctx, scene.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, tag := range sceneTags {
+		tags = append(tags, &graphql.DraftEntityInput{Name: tag.Name})
+	}
+	draft.Tags = tags
+
+	if imagePath != "" {
 		exists, _ := fsutil.FileExists(imagePath)
 		if exists {
 			file, err := os.Open(imagePath)
@@ -925,15 +890,26 @@ func (c Client) SubmitSceneDraft(ctx context.Context, sceneID int, endpoint stri
 				image = file
 			}
 		}
+	}
 
-		return nil
-	}); err != nil {
+	if err := scene.LoadStashIDs(ctx, r.Scene); err != nil {
 		return nil, err
 	}
 
+	stashIDs := scene.StashIDs.List()
+	var stashID *string
+	for _, v := range stashIDs {
+		if v.Endpoint == endpoint {
+			vv := v.StashID
+			stashID = &vv
+			break
+		}
+	}
+	draft.ID = stashID
+
 	var id *string
 	var ret graphql.SubmitSceneDraft
-	err := c.submitDraft(ctx, graphql.SubmitSceneDraftDocument, draft, image, &ret)
+	err = c.submitDraft(ctx, graphql.SubmitSceneDraftDocument, draft, image, &ret)
 	id = ret.SubmitSceneDraft.ID
 
 	return id, err
@@ -950,75 +926,83 @@ func (c Client) SubmitSceneDraft(ctx context.Context, sceneID int, endpoint stri
 func (c Client) SubmitPerformerDraft(ctx context.Context, performer *models.Performer, endpoint string) (*string, error) {
 	draft := graphql.PerformerDraftInput{}
 	var image io.Reader
-	if err := c.txnManager.WithReadTxn(ctx, func(r models.ReaderRepository) error {
-		pqb := r.Performer()
-		img, _ := pqb.GetImage(performer.ID)
-		if img != nil {
-			image = bytes.NewReader(img)
-		}
+	pqb := c.repository.Performer
+	img, _ := pqb.GetImage(ctx, performer.ID)
+	if img != nil {
+		image = bytes.NewReader(img)
+	}
 
-		if performer.Name.Valid {
-			draft.Name = performer.Name.String
-		}
-		if performer.Birthdate.Valid {
-			draft.Birthdate = &performer.Birthdate.String
-		}
-		if performer.Country.Valid {
-			draft.Country = &performer.Country.String
-		}
-		if performer.Ethnicity.Valid {
-			draft.Ethnicity = &performer.Ethnicity.String
-		}
-		if performer.EyeColor.Valid {
-			draft.EyeColor = &performer.EyeColor.String
-		}
-		if performer.FakeTits.Valid {
-			draft.BreastType = &performer.FakeTits.String
-		}
-		if performer.Gender.Valid {
-			draft.Gender = &performer.Gender.String
-		}
-		if performer.HairColor.Valid {
-			draft.HairColor = &performer.HairColor.String
-		}
-		if performer.Height.Valid {
-			draft.Height = &performer.Height.String
-		}
-		if performer.Measurements.Valid {
-			draft.Measurements = &performer.Measurements.String
-		}
-		if performer.Piercings.Valid {
-			draft.Piercings = &performer.Piercings.String
-		}
-		if performer.Tattoos.Valid {
-			draft.Tattoos = &performer.Tattoos.String
-		}
-		if performer.Aliases.Valid {
-			draft.Aliases = &performer.Aliases.String
-		}
+	if performer.Name.Valid {
+		draft.Name = performer.Name.String
+	}
+	if performer.Birthdate.Valid {
+		draft.Birthdate = &performer.Birthdate.String
+	}
+	if performer.Country.Valid {
+		draft.Country = &performer.Country.String
+	}
+	if performer.Ethnicity.Valid {
+		draft.Ethnicity = &performer.Ethnicity.String
+	}
+	if performer.EyeColor.Valid {
+		draft.EyeColor = &performer.EyeColor.String
+	}
+	if performer.FakeTits.Valid {
+		draft.BreastType = &performer.FakeTits.String
+	}
+	if performer.Gender.Valid {
+		draft.Gender = &performer.Gender.String
+	}
+	if performer.HairColor.Valid {
+		draft.HairColor = &performer.HairColor.String
+	}
+	if performer.Height.Valid {
+		draft.Height = &performer.Height.String
+	}
+	if performer.Measurements.Valid {
+		draft.Measurements = &performer.Measurements.String
+	}
+	if performer.Piercings.Valid {
+		draft.Piercings = &performer.Piercings.String
+	}
+	if performer.Tattoos.Valid {
+		draft.Tattoos = &performer.Tattoos.String
+	}
+	if performer.Aliases.Valid {
+		draft.Aliases = &performer.Aliases.String
+	}
 
-		var urls []string
-		if len(strings.TrimSpace(performer.Twitter.String)) > 0 {
-			urls = append(urls, "https://twitter.com/"+strings.TrimSpace(performer.Twitter.String))
-		}
-		if len(strings.TrimSpace(performer.Instagram.String)) > 0 {
-			urls = append(urls, "https://instagram.com/"+strings.TrimSpace(performer.Instagram.String))
-		}
-		if len(strings.TrimSpace(performer.URL.String)) > 0 {
-			urls = append(urls, strings.TrimSpace(performer.URL.String))
-		}
-		if len(urls) > 0 {
-			draft.Urls = urls
-		}
+	var urls []string
+	if len(strings.TrimSpace(performer.Twitter.String)) > 0 {
+		urls = append(urls, "https://twitter.com/"+strings.TrimSpace(performer.Twitter.String))
+	}
+	if len(strings.TrimSpace(performer.Instagram.String)) > 0 {
+		urls = append(urls, "https://instagram.com/"+strings.TrimSpace(performer.Instagram.String))
+	}
+	if len(strings.TrimSpace(performer.URL.String)) > 0 {
+		urls = append(urls, strings.TrimSpace(performer.URL.String))
+	}
+	if len(urls) > 0 {
+		draft.Urls = urls
+	}
 
-		return nil
-	}); err != nil {
+	stashIDs, err := pqb.GetStashIDs(ctx, performer.ID)
+	if err != nil {
 		return nil, err
 	}
+	var stashID *string
+	for _, v := range stashIDs {
+		c := v
+		if v.Endpoint == endpoint {
+			stashID = &c.StashID
+			break
+		}
+	}
+	draft.ID = stashID
 
 	var id *string
 	var ret graphql.SubmitPerformerDraft
-	err := c.submitDraft(ctx, graphql.SubmitPerformerDraftDocument, draft, image, &ret)
+	err = c.submitDraft(ctx, graphql.SubmitPerformerDraftDocument, draft, image, &ret)
 	id = ret.SubmitPerformerDraft.ID
 
 	return id, err
@@ -1117,7 +1101,7 @@ func (c *Client) submitDraft(ctx context.Context, query string, input interface{
 	}
 	defer resp.Body.Close()
 
-	responseBytes, err := ioutil.ReadAll(resp.Body)
+	responseBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}

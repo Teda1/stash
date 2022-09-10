@@ -1,25 +1,36 @@
-import React, { MouseEvent } from "react";
+import React, { MouseEvent, useMemo } from "react";
 import { Button, ButtonGroup } from "react-bootstrap";
 import cx from "classnames";
 import * as GQL from "src/core/generated-graphql";
 import { Icon, TagLink, HoverPopover, SweatDrops } from "src/components/Shared";
-import { TextUtils } from "src/utils";
 import { PerformerPopoverButton } from "../Shared/PerformerPopoverButton";
 import { GridCard } from "../Shared/GridCard";
 import { RatingBanner } from "../Shared/RatingBanner";
+import {
+  faBox,
+  faImages,
+  faSearch,
+  faTag,
+} from "@fortawesome/free-solid-svg-icons";
+import { objectTitle } from "src/core/files";
 
 interface IImageCardProps {
   image: GQL.SlimImageDataFragment;
   selecting?: boolean;
-  selected: boolean | undefined;
+  selected?: boolean | undefined;
   zoomIndex: number;
-  onSelectedChanged: (selected: boolean, shiftKey: boolean) => void;
+  onSelectedChanged?: (selected: boolean, shiftKey: boolean) => void;
   onPreview?: (ev: MouseEvent) => void;
 }
 
 export const ImageCard: React.FC<IImageCardProps> = (
   props: IImageCardProps
 ) => {
+  const file = useMemo(
+    () => (props.image.files.length > 0 ? props.image.files[0] : undefined),
+    [props.image]
+  );
+
   function maybeRenderTagPopoverButton() {
     if (props.image.tags.length <= 0) return;
 
@@ -34,7 +45,7 @@ export const ImageCard: React.FC<IImageCardProps> = (
         content={popoverContent}
       >
         <Button className="minimal">
-          <Icon icon="tag" />
+          <Icon icon={faTag} />
           <span>{props.image.tags.length}</span>
         </Button>
       </HoverPopover>
@@ -76,7 +87,7 @@ export const ImageCard: React.FC<IImageCardProps> = (
         content={popoverContent}
       >
         <Button className="minimal">
-          <Icon icon="images" />
+          <Icon icon={faImages} />
           <span>{props.image.galleries.length}</span>
         </Button>
       </HoverPopover>
@@ -88,7 +99,7 @@ export const ImageCard: React.FC<IImageCardProps> = (
       return (
         <div className="organized">
           <Button className="minimal">
-            <Icon icon="box" />
+            <Icon icon={faBox} />
           </Button>
         </div>
       );
@@ -119,9 +130,8 @@ export const ImageCard: React.FC<IImageCardProps> = (
   }
 
   function isPortrait() {
-    const { file } = props.image;
-    const width = file.width ? file.width : 0;
-    const height = file.height ? file.height : 0;
+    const width = file?.width ? file.width : 0;
+    const height = file?.height ? file.height : 0;
     return height > width;
   }
 
@@ -129,11 +139,7 @@ export const ImageCard: React.FC<IImageCardProps> = (
     <GridCard
       className={`image-card zoom-${props.zoomIndex}`}
       url={`/images/${props.image.id}`}
-      title={
-        props.image.title
-          ? props.image.title
-          : TextUtils.fileNameFromPath(props.image.path)
-      }
+      title={objectTitle(props.image)}
       linkClassName="image-card-link"
       image={
         <>
@@ -146,7 +152,7 @@ export const ImageCard: React.FC<IImageCardProps> = (
             {props.onPreview ? (
               <div className="preview-button">
                 <Button onClick={props.onPreview}>
-                  <Icon icon="search" />
+                  <Icon icon={faSearch} />
                 </Button>
               </div>
             ) : undefined}

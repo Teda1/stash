@@ -6,6 +6,7 @@ import { Modal } from "src/components/Shared";
 import { useToast } from "src/hooks";
 import { ConfigurationContext } from "src/hooks/Config";
 import { FormattedMessage, useIntl } from "react-intl";
+import { faTrashAlt } from "@fortawesome/free-solid-svg-icons";
 
 interface IDeleteGalleryDialogProps {
   selected: GQL.SlimGalleryDataFragment[];
@@ -72,8 +73,14 @@ export const DeleteGalleriesDialog: React.FC<IDeleteGalleryDialogProps> = (
       return;
     }
 
-    const fsGalleries = props.selected.filter((g) => g.path);
-    if (fsGalleries.length === 0) {
+    const deletedFiles: string[] = [];
+
+    props.selected.forEach((s) => {
+      const paths = s.files.map((f) => f.path);
+      deletedFiles.push(...paths);
+    });
+
+    if (deletedFiles.length === 0) {
       return;
     }
 
@@ -82,7 +89,7 @@ export const DeleteGalleriesDialog: React.FC<IDeleteGalleryDialogProps> = (
         <p className="font-weight-bold">
           <FormattedMessage
             values={{
-              count: fsGalleries.length,
+              count: deletedFiles.length,
               singularEntity: intl.formatMessage({ id: "file" }),
               pluralEntity: intl.formatMessage({ id: "files" }),
             }}
@@ -90,13 +97,13 @@ export const DeleteGalleriesDialog: React.FC<IDeleteGalleryDialogProps> = (
           />
         </p>
         <ul>
-          {fsGalleries.slice(0, 5).map((s) => (
-            <li key={s.path}>{s.path}</li>
+          {deletedFiles.slice(0, 5).map((s) => (
+            <li key={s}>{s}</li>
           ))}
-          {fsGalleries.length > 5 && (
+          {deletedFiles.length > 5 && (
             <FormattedMessage
               values={{
-                count: fsGalleries.length - 5,
+                count: deletedFiles.length - 5,
                 singularEntity: intl.formatMessage({ id: "file" }),
                 pluralEntity: intl.formatMessage({ id: "files" }),
               }}
@@ -114,7 +121,7 @@ export const DeleteGalleriesDialog: React.FC<IDeleteGalleryDialogProps> = (
   return (
     <Modal
       show
-      icon="trash-alt"
+      icon={faTrashAlt}
       header={header}
       accept={{
         variant: "danger",

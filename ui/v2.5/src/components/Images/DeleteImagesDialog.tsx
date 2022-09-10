@@ -6,6 +6,7 @@ import { Modal } from "src/components/Shared";
 import { useToast } from "src/hooks";
 import { ConfigurationContext } from "src/hooks/Config";
 import { FormattedMessage, useIntl } from "react-intl";
+import { faTrashAlt } from "@fortawesome/free-solid-svg-icons";
 
 interface IDeleteImageDialogProps {
   selected: GQL.SlimImageDataFragment[];
@@ -72,12 +73,19 @@ export const DeleteImagesDialog: React.FC<IDeleteImageDialogProps> = (
       return;
     }
 
+    const deletedFiles: string[] = [];
+
+    props.selected.forEach((s) => {
+      const paths = s.files.map((f) => f.path);
+      deletedFiles.push(...paths);
+    });
+
     return (
       <div className="delete-dialog alert alert-danger text-break">
         <p className="font-weight-bold">
           <FormattedMessage
             values={{
-              count: props.selected.length,
+              count: deletedFiles.length,
               singularEntity: intl.formatMessage({ id: "file" }),
               pluralEntity: intl.formatMessage({ id: "files" }),
             }}
@@ -85,13 +93,13 @@ export const DeleteImagesDialog: React.FC<IDeleteImageDialogProps> = (
           />
         </p>
         <ul>
-          {props.selected.slice(0, 5).map((s) => (
-            <li key={s.path}>{s.path}</li>
+          {deletedFiles.slice(0, 5).map((s) => (
+            <li key={s}>{s}</li>
           ))}
-          {props.selected.length > 5 && (
+          {deletedFiles.length > 5 && (
             <FormattedMessage
               values={{
-                count: props.selected.length - 5,
+                count: deletedFiles.length - 5,
                 singularEntity: intl.formatMessage({ id: "file" }),
                 pluralEntity: intl.formatMessage({ id: "files" }),
               }}
@@ -106,7 +114,7 @@ export const DeleteImagesDialog: React.FC<IDeleteImageDialogProps> = (
   return (
     <Modal
       show
-      icon="trash-alt"
+      icon={faTrashAlt}
       header={header}
       accept={{
         variant: "danger",

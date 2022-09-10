@@ -17,6 +17,7 @@ import { SettingsServicesPanel } from "./SettingsServicesPanel";
 import { SettingsContext } from "./context";
 import { SettingsLibraryPanel } from "./SettingsLibraryPanel";
 import { SettingsSecurityPanel } from "./SettingsSecurityPanel";
+import Changelog from "../Changelog/Changelog";
 
 export const Settings: React.FC = () => {
   const intl = useIntl();
@@ -93,6 +94,11 @@ export const Settings: React.FC = () => {
               </Nav.Link>
             </Nav.Item>
             <Nav.Item>
+              <Nav.Link eventKey="changelog">
+                <FormattedMessage id="config.categories.changelog" />
+              </Nav.Link>
+            </Nav.Item>
+            <Nav.Item>
               <Nav.Link eventKey="about">
                 <FormattedMessage id="config.categories.about" />
               </Nav.Link>
@@ -138,6 +144,9 @@ export const Settings: React.FC = () => {
               <Tab.Pane eventKey="logs" unmountOnExit>
                 <SettingsLogsPanel />
               </Tab.Pane>
+              <Tab.Pane eventKey="changelog" unmountOnExit>
+                <Changelog />
+              </Tab.Pane>
               <Tab.Pane eventKey="about" unmountOnExit>
                 <SettingsAboutPanel />
               </Tab.Pane>
@@ -148,3 +157,5 @@ export const Settings: React.FC = () => {
     </Tab.Container>
   );
 };
+
+export default Settings;

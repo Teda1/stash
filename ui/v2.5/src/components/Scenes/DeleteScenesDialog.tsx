@@ -6,6 +6,8 @@ import { Modal } from "src/components/Shared";
 import { useToast } from "src/hooks";
 import { ConfigurationContext } from "src/hooks/Config";
 import { FormattedMessage, useIntl } from "react-intl";
+import { faTrashAlt } from "@fortawesome/free-solid-svg-icons";
+import { objectPath } from "src/core/files";
 
 interface IDeleteSceneDialogProps {
   selected: GQL.SlimSceneDataFragment[];
@@ -68,13 +70,13 @@ export const DeleteScenesDialog: React.FC<IDeleteSceneDialogProps> = (
     setIsDeleting(false);
   }
 
-  function funscriptPath(scenePath: string) {
-    const extIndex = scenePath.lastIndexOf(".");
+  function funscriptPath(sp: string) {
+    const extIndex = sp.lastIndexOf(".");
     if (extIndex !== -1) {
-      return scenePath.substring(0, extIndex + 1) + "funscript";
+      return sp.substring(0, extIndex + 1) + "funscript";
     }
 
-    return scenePath;
+    return sp;
   }
 
   function maybeRenderDeleteFileAlert() {
@@ -85,9 +87,10 @@ export const DeleteScenesDialog: React.FC<IDeleteSceneDialogProps> = (
     const deletedFiles: string[] = [];
 
     props.selected.forEach((s) => {
-      deletedFiles.push(s.path);
-      if (s.interactive) {
-        deletedFiles.push(funscriptPath(s.path));
+      const paths = s.files.map((f) => f.path);
+      deletedFiles.push(...paths);
+      if (s.interactive && s.files.length) {
+        deletedFiles.push(funscriptPath(objectPath(s)));
       }
     });
 
@@ -96,7 +99,7 @@ export const DeleteScenesDialog: React.FC<IDeleteSceneDialogProps> = (
         <p className="font-weight-bold">
           <FormattedMessage
             values={{
-              count: props.selected.length,
+              count: deletedFiles.length,
               singularEntity: intl.formatMessage({ id: "file" }),
               pluralEntity: intl.formatMessage({ id: "files" }),
             }}
@@ -125,7 +128,7 @@ export const DeleteScenesDialog: React.FC<IDeleteSceneDialogProps> = (
   return (
     <Modal
       show
-      icon="trash-alt"
+      icon={faTrashAlt}
       header={header}
       accept={{
         variant: "danger",
@@ -162,3 +165,5 @@ export const DeleteScenesDialog: React.FC<IDeleteSceneDialogProps> = (
     </Modal>
   );
 };
+
+export default DeleteScenesDialog;

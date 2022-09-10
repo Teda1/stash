@@ -8,6 +8,7 @@ import (
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/txn"
 	"github.com/stashapp/stash/pkg/utils"
 )
 
@@ -49,8 +50,13 @@ func KillRunningStreams(scene *models.Scene, fileNamingAlgo models.HashAlgorithm
 	instance.ReadLockManager.Cancel(transcodePath)
 }
 
+type SceneCoverGetter interface {
+	GetCover(ctx context.Context, sceneID int) ([]byte, error)
+}
+
 type SceneServer struct {
-	TXNManager models.TransactionManager
+	TxnManager       txn.Manager
+	SceneCoverGetter SceneCoverGetter
 }
 
 func (s *SceneServer) StreamSceneDirect(scene *models.Scene, w http.ResponseWriter, r *http.Request) {
@@ -58,8 +64,11 @@ func (s *SceneServer) StreamSceneDirect(scene *models.Scene, w http.ResponseWrit
 
 	filepath := GetInstance().Paths.Scene.GetStreamPath(scene.Path, scene.GetHash(fileNamingAlgo))
 	streamRequestCtx := NewStreamRequestContext(w, r)
-	lockCtx := GetInstance().ReadLockManager.ReadLock(streamRequestCtx, filepath)
-	defer lockCtx.Cancel()
+
+	// #2579 - hijacking and closing the connection here causes video playback to fail in Safari
+	// We trust that the request context will be closed, so we don't need to call Cancel on the
+	// returned context here.
+	_ = GetInstance().ReadLockManager.ReadLock(streamRequestCtx, filepath)
 	http.ServeFile(w, r, filepath)
 }
 
@@ -72,8 +81,8 @@ func (s *SceneServer) ServeScreenshot(scene *models.Scene, w http.ResponseWriter
 		http.ServeFile(w, r, filepath)
 	} else {
 		var cover []byte
-		err := s.TXNManager.WithReadTxn(r.Context(), func(repo models.ReaderRepository) error {
-			cover, _ = repo.Scene().GetCover(scene.ID)
+		err := txn.WithTxn(r.Context(), s.TxnManager, func(ctx context.Context) error {
+			cover, _ = s.SceneCoverGetter.GetCover(ctx, scene.ID)
 			return nil
 		})
 		if err != nil {

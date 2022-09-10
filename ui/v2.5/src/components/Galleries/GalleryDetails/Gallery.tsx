@@ -1,5 +1,5 @@
 import { Tab, Nav, Dropdown } from "react-bootstrap";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useHistory, Link } from "react-router-dom";
 import { FormattedMessage, useIntl } from "react-intl";
 import { Helmet } from "react-helmet";
@@ -10,7 +10,6 @@ import {
   useGalleryUpdate,
 } from "src/core/StashService";
 import { ErrorMessage, LoadingIndicator, Icon } from "src/components/Shared";
-import { TextUtils } from "src/utils";
 import Mousetrap from "mousetrap";
 import { useToast } from "src/hooks";
 import { OrganizedButton } from "src/components/Scenes/SceneDetails/OrganizedButton";
@@ -21,6 +20,8 @@ import { GalleryImagesPanel } from "./GalleryImagesPanel";
 import { GalleryAddPanel } from "./GalleryAddPanel";
 import { GalleryFileInfoPanel } from "./GalleryFileInfoPanel";
 import { GalleryScenesPanel } from "./GalleryScenesPanel";
+import { faEllipsisV } from "@fortawesome/free-solid-svg-icons";
+import { galleryPath, galleryTitle } from "src/core/galleries";
 
 interface IProps {
   gallery: GQL.GalleryDataFragment;
@@ -45,6 +46,8 @@ export const GalleryPage: React.FC<IProps> = ({ gallery }) => {
     }
   };
 
+  const path = useMemo(() => galleryPath(gallery), [gallery]);
+
   const [updateGallery] = useGalleryUpdate();
 
   const [organizedLoading, setOrganizedLoading] = useState(false);
@@ -68,12 +71,12 @@ export const GalleryPage: React.FC<IProps> = ({ gallery }) => {
   };
 
   async function onRescan() {
-    if (!gallery || !gallery.path) {
+    if (!gallery || !path) {
       return;
     }
 
     await mutateMetadataScan({
-      paths: [gallery.path],
+      paths: [path],
     });
 
     Toast.success({
@@ -116,10 +119,10 @@ export const GalleryPage: React.FC<IProps> = ({ gallery }) => {
           className="minimal"
           title={intl.formatMessage({ id: "operations" })}
         >
-          <Icon icon="ellipsis-v" />
+          <Icon icon={faEllipsisV} />
         </Dropdown.Toggle>
         <Dropdown.Menu className="bg-secondary text-white">
-          {gallery.path ? (
+          {path ? (
             <Dropdown.Item
               key="rescan"
               className="bg-secondary text-white"
@@ -167,7 +170,7 @@ export const GalleryPage: React.FC<IProps> = ({ gallery }) => {
                 </Nav.Link>
               </Nav.Item>
             )}
-            {gallery.path ? (
+            {path ? (
               <Nav.Item>
                 <Nav.Link eventKey="gallery-file-info-panel">
                   <FormattedMessage id="file_info" />
@@ -269,12 +272,12 @@ export const GalleryPage: React.FC<IProps> = ({ gallery }) => {
     };
   });
 
+  const title = galleryTitle(gallery);
+
   return (
     <div className="row">
       <Helmet>
-        <title>
-          {gallery.title ?? TextUtils.fileNameFromPath(gallery.path ?? "")}
-        </title>
+        <title>{title}</title>
       </Helmet>
       {maybeRenderDeleteDialog()}
       <div className="gallery-tabs">
@@ -290,9 +293,7 @@ export const GalleryPage: React.FC<IProps> = ({ gallery }) => {
               </Link>
             </h1>
           )}
-          <h3 className="gallery-header">
-            {gallery.title ?? TextUtils.fileNameFromPath(gallery.path ?? "")}
-          </h3>
+          <h3 className="gallery-header">{title}</h3>
         </div>
         {renderTabs()}
       </div>

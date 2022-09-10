@@ -28,6 +28,16 @@ import { TextUtils } from "src/utils";
 import { DeleteScenesDialog } from "src/components/Scenes/DeleteScenesDialog";
 import { EditScenesDialog } from "../Scenes/EditScenesDialog";
 import { PerformerPopoverButton } from "../Shared/PerformerPopoverButton";
+import {
+  faBox,
+  faExclamationTriangle,
+  faFilm,
+  faImages,
+  faMapMarkerAlt,
+  faPencilAlt,
+  faTag,
+  faTrash,
+} from "@fortawesome/free-solid-svg-icons";
 
 const CLASSNAME = "duplicate-checker";
 
@@ -124,10 +134,8 @@ export const SceneDuplicateChecker: React.FC = () => {
     setEditingScenes(true);
   }
 
-  const renderFilesize = (filesize: string | null | undefined) => {
-    const { size: parsedSize, unit } = TextUtils.fileSize(
-      Number.parseInt(filesize ?? "0", 10)
-    );
+  const renderFilesize = (filesize: number | null | undefined) => {
+    const { size: parsedSize, unit } = TextUtils.fileSize(filesize ?? 0);
     return (
       <FormattedNumber
         value={parsedSize}
@@ -144,7 +152,7 @@ export const SceneDuplicateChecker: React.FC = () => {
     if (missingPhashes > 0) {
       return (
         <p className="lead">
-          <Icon icon="exclamation-triangle" className="text-warning" />
+          <Icon icon={faExclamationTriangle} className="text-warning" />
           Missing phashes for {missingPhashes} scenes. Please run the phash
           generation task.
         </p>
@@ -173,7 +181,7 @@ export const SceneDuplicateChecker: React.FC = () => {
     return (
       <HoverPopover placement="bottom" content={popoverContent}>
         <Button className="minimal">
-          <Icon icon="tag" />
+          <Icon icon={faTag} />
           <span>{scene.tags.length}</span>
         </Button>
       </HoverPopover>
@@ -216,7 +224,7 @@ export const SceneDuplicateChecker: React.FC = () => {
         className="tag-tooltip"
       >
         <Button className="minimal">
-          <Icon icon="film" />
+          <Icon icon={faFilm} />
           <span>{scene.movies.length}</span>
         </Button>
       </HoverPopover>
@@ -236,7 +244,7 @@ export const SceneDuplicateChecker: React.FC = () => {
     return (
       <HoverPopover placement="bottom" content={popoverContent}>
         <Button className="minimal">
-          <Icon icon="map-marker-alt" />
+          <Icon icon={faMapMarkerAlt} />
           <span>{scene.scene_markers.length}</span>
         </Button>
       </HoverPopover>
@@ -268,7 +276,7 @@ export const SceneDuplicateChecker: React.FC = () => {
     return (
       <HoverPopover placement="bottom" content={popoverContent}>
         <Button className="minimal">
-          <Icon icon="images" />
+          <Icon icon={faImages} />
           <span>{scene.galleries.length}</span>
         </Button>
       </HoverPopover>
@@ -280,7 +288,7 @@ export const SceneDuplicateChecker: React.FC = () => {
       return (
         <div>
           <Button className="minimal">
-            <Icon icon="box" />
+            <Icon icon={faBox} />
           </Button>
         </div>
       );
@@ -332,7 +340,7 @@ export const SceneDuplicateChecker: React.FC = () => {
               }
             >
               <Button variant="secondary" onClick={onEdit}>
-                <Icon icon="pencil-alt" />
+                <Icon icon={faPencilAlt} />
               </Button>
             </OverlayTrigger>
             <OverlayTrigger
@@ -343,7 +351,7 @@ export const SceneDuplicateChecker: React.FC = () => {
               }
             >
               <Button variant="danger" onClick={handleDeleteChecked}>
-                <Icon icon="trash" />
+                <Icon icon={faTrash} />
               </Button>
             </OverlayTrigger>
           </ButtonGroup>
@@ -467,78 +475,84 @@ export const SceneDuplicateChecker: React.FC = () => {
           </thead>
           <tbody>
             {filteredScenes.map((group, groupIndex) =>
-              group.map((scene, i) => (
-                <>
-                  {i === 0 && groupIndex !== 0 ? (
-                    <tr className="separator" />
-                  ) : undefined}
-                  <tr
-                    className={i === 0 ? "duplicate-group" : ""}
-                    key={scene.id}
-                  >
-                    <td>
-                      <Form.Check
-                        onChange={(e) =>
-                          handleCheck(e.currentTarget.checked, scene.id)
-                        }
-                      />
-                    </td>
-                    <td>
-                      <HoverPopover
-                        content={
+              group.map((scene, i) => {
+                const file =
+                  scene.files.length > 0 ? scene.files[0] : undefined;
+
+                return (
+                  <>
+                    {i === 0 && groupIndex !== 0 ? (
+                      <tr className="separator" />
+                    ) : undefined}
+                    <tr
+                      className={i === 0 ? "duplicate-group" : ""}
+                      key={scene.id}
+                    >
+                      <td>
+                        <Form.Check
+                          onChange={(e) =>
+                            handleCheck(e.currentTarget.checked, scene.id)
+                          }
+                        />
+                      </td>
+                      <td>
+                        <HoverPopover
+                          content={
+                            <img
+                              src={scene.paths.sprite ?? ""}
+                              alt=""
+                              width={600}
+                            />
+                          }
+                          placement="right"
+                        >
                           <img
                             src={scene.paths.sprite ?? ""}
                             alt=""
-                            width={600}
+                            width={100}
                           />
-                        }
-                        placement="right"
-                      >
-                        <img
-                          src={scene.paths.sprite ?? ""}
-                          alt=""
-                          width={100}
+                        </HoverPopover>
+                      </td>
+                      <td className="text-left">
+                        <p>
+                          <Link to={`/scenes/${scene.id}`}>
+                            {scene.title
+                              ? scene.title
+                              : TextUtils.fileNameFromPath(file?.path ?? "")}
+                          </Link>
+                        </p>
+                        <p className="scene-path">{file?.path ?? ""}</p>
+                      </td>
+                      <td className="scene-details">
+                        {maybeRenderPopoverButtonGroup(scene)}
+                      </td>
+                      <td>
+                        {file?.duration &&
+                          TextUtils.secondsToTimestamp(file.duration)}
+                      </td>
+                      <td>{renderFilesize(file?.size ?? 0)}</td>
+                      <td>{`${file?.width ?? 0}x${file?.height ?? 0}`}</td>
+                      <td>
+                        <FormattedNumber
+                          value={(file?.bit_rate ?? 0) / 1000000}
+                          maximumFractionDigits={2}
                         />
-                      </HoverPopover>
-                    </td>
-                    <td className="text-left">
-                      <p>
-                        <Link to={`/scenes/${scene.id}`}>
-                          {scene.title ??
-                            TextUtils.fileNameFromPath(scene.path)}
-                        </Link>
-                      </p>
-                      <p className="scene-path">{scene.path}</p>
-                    </td>
-                    <td className="scene-details">
-                      {maybeRenderPopoverButtonGroup(scene)}
-                    </td>
-                    <td>
-                      {scene.file.duration &&
-                        TextUtils.secondsToTimestamp(scene.file.duration)}
-                    </td>
-                    <td>{renderFilesize(scene.file.size)}</td>
-                    <td>{`${scene.file.width}x${scene.file.height}`}</td>
-                    <td>
-                      <FormattedNumber
-                        value={(scene.file.bitrate ?? 0) / 1000000}
-                        maximumFractionDigits={2}
-                      />
-                      &nbsp;mbps
-                    </td>
-                    <td>{scene.file.video_codec}</td>
-                    <td>
-                      <Button
-                        className="edit-button"
-                        variant="danger"
-                        onClick={() => handleDeleteScene(scene)}
-                      >
-                        <FormattedMessage id="actions.delete" />
-                      </Button>
-                    </td>
-                  </tr>
-                </>
-              ))
+                        &nbsp;mbps
+                      </td>
+                      <td>{file?.video_codec ?? ""}</td>
+                      <td>
+                        <Button
+                          className="edit-button"
+                          variant="danger"
+                          onClick={() => handleDeleteScene(scene)}
+                        >
+                          <FormattedMessage id="actions.delete" />
+                        </Button>
+                      </td>
+                    </tr>
+                  </>
+                );
+              })
             )}
           </tbody>
         </Table>
@@ -550,3 +564,5 @@ export const SceneDuplicateChecker: React.FC = () => {
     </Card>
   );
 };
+
+export default SceneDuplicateChecker;
