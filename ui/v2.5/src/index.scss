@@ -1072,6 +1072,41 @@ div.dropdown-menu {
   }
 }
 
+.side-nav {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  width: 5rem;
+  top: 0;
+  padding-top: 3.5rem;
+  align-items: center;
+
+  .nav-link {
+    color: #f5f8fa;
+    width: 5rem;
+    padding: .8rem 0;
+    contain: content;
+    gap: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    svg {
+      height: 24px;
+    }
+
+    a span {
+      font-size: .8rem;
+      font-weight: 400;
+      line-height: 1.4rem;
+      max-height: 1.4rem;
+      margin: 0 auto;
+      display: block;
+    }
+  }
+}
+
 .donate {
   align-items: center;
   display: flex;
