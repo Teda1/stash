@@ -347,38 +347,6 @@ export const MainNavbar: React.FC = () => {
         onToggle={setExpanded}
         ref={navbarRef}
       >
-        <Navbar.Collapse className="bg-dark order-sm-1">
-          <Fade in={!loading}>
-            <>
-              <MainNavbarMenuItems>
-                {menuItems.map(({ href, icon, message }) => (
-                  <Nav.Link
-                    eventKey={href}
-                    as="div"
-                    key={href}
-                    className="col-4 col-sm-3 col-md-2 col-lg-auto"
-                  >
-                    <LinkContainer activeClassName="active" exact to={href}>
-                      <Button className="minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center">
-                        <Icon
-                          {...{ icon }}
-                          className="nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0"
-                        />
-                        <span>{intl.formatMessage(message)}</span>
-                      </Button>
-                    </LinkContainer>
-                  </Nav.Link>
-                ))}
-              </MainNavbarMenuItems>
-              <Nav>
-                <MainNavbarUtilityItems>
-                  {renderUtilityButtons()}
-                </MainNavbarUtilityItems>
-              </Nav>
-            </>
-          </Fade>
-        </Navbar.Collapse>
-
         <Navbar.Brand as="div" onClick={handleDismiss}>
           <Link to="/">
             <Button className="minimal brand-link d-inline-block">Stash</Button>
@@ -403,6 +371,32 @@ export const MainNavbar: React.FC = () => {
           </Navbar.Toggle>
         </Nav>
       </Navbar>
+      <Navbar.Collapse className="side-nav show bg-dark order-sm-1">
+          <Fade in={!loading}>
+            <>
+              <MainNavbarMenuItems>
+                {menuItems.map(({ href, icon, message }) => (
+                  <Nav.Link
+                    eventKey={href}
+                    as="div"
+                    key={href}
+                    className="col-4 col-sm-3 col-md-2 col-lg-auto"
+                  >
+                    <LinkContainer activeClassName="active" exact to={href}>
+                      <Button className="minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center">
+                        <Icon
+                          {...{ icon }}
+                          className="nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0"
+                        />
+                        <span>{intl.formatMessage(message)}</span>
+                      </Button>
+                    </LinkContainer>
+                  </Nav.Link>
+                ))}
+              </MainNavbarMenuItems>
+            </>
+          </Fade>
+        </Navbar.Collapse>
     </>
   );
 };
