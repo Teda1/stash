@@ -173,7 +173,15 @@ const MainNavbarUtilityItems = PatchComponent(
   }
 );
 
-export const MainNavbar: React.FC = () => {
+interface IMainNavbarProps {
+  hideSizeNav: boolean;
+  setHideSideNav: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+export const MainNavbar: React.FC<IMainNavbarProps> = ({
+  hideSizeNav,
+  setHideSideNav,
+}) => {
   const history = useHistory();
   const location = useLocation();
   const { configuration, loading } = React.useContext(ConfigurationContext);
@@ -334,6 +342,10 @@ export const MainNavbar: React.FC = () => {
     );
   }
 
+  function cx(arg0: string, arg1: string): string | undefined {
+    throw new Error("Function not implemented.");
+  }
+
   return (
     <>
       <Navbar
@@ -347,31 +359,11 @@ export const MainNavbar: React.FC = () => {
         onToggle={setExpanded}
         ref={navbarRef}
       >
-        <Navbar.Brand as="div" onClick={handleDismiss}>
-          <Link to="/">
-            <Button className="minimal brand-link d-inline-block">Stash</Button>
-          </Link>
-        </Navbar.Brand>
-
-        <Nav className="navbar-buttons flex-row ml-auto order-xl-2">
-          {!!newPath && (
-            <div className="mr-2">
-              <Link to={newPath}>
-                <Button variant="primary">
-                  <FormattedMessage id="new" defaultMessage="New" />
-                </Button>
-              </Link>
-            </div>
-          )}
-          <MainNavbarUtilityItems>
-            {renderUtilityButtons()}
-          </MainNavbarUtilityItems>
-          <Navbar.Toggle className="nav-menu-toggle ml-sm-2">
-            <Icon icon={expanded ? faTimes : faBars} />
-          </Navbar.Toggle>
-        </Nav>
-      </Navbar>
-      <Navbar.Collapse className="side-nav show bg-dark order-sm-1">
+        <Navbar.Collapse
+          className={`bg-dark order-sm-1 side-nav ${
+            hideSizeNav ? "collapsed" : "expanded"
+          }`}
+        >
           <Fade in={!loading}>
             <>
               <MainNavbarMenuItems>
@@ -394,9 +386,44 @@ export const MainNavbar: React.FC = () => {
                   </Nav.Link>
                 ))}
               </MainNavbarMenuItems>
+              <Nav>
+                <MainNavbarUtilityItems>
+                  {renderUtilityButtons()}
+                </MainNavbarUtilityItems>
+              </Nav>
             </>
           </Fade>
         </Navbar.Collapse>
+
+        <div className="side-nav-toggle">
+          <Button
+            className="navbar-toggler"
+            onClick={() => setHideSideNav(!hideSizeNav)}
+          >
+            <Icon icon={faBars} />
+          </Button>
+        </div>
+        <Navbar.Brand as="div" onClick={handleDismiss}>
+          <Link to="/">
+            <Button className="minimal brand-link d-inline-block">Stash</Button>
+          </Link>
+        </Navbar.Brand>
+
+        <Nav className="navbar-buttons flex-row ml-auto order-xl-2">
+          {!!newPath && (
+            <div className="mr-2">
+              <Link to={newPath}>
+                <Button variant="primary">
+                  <FormattedMessage id="new" defaultMessage="New" />
+                </Button>
+              </Link>
+            </div>
+          )}
+          <MainNavbarUtilityItems>
+            {renderUtilityButtons()}
+          </MainNavbarUtilityItems>
+        </Nav>
+      </Navbar>
     </>
   );
 };

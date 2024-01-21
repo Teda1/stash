@@ -1007,7 +1007,6 @@ div.dropdown-menu {
       padding-bottom: 0.5rem;
 
       @include media-breakpoint-up(xl) {
-        flex-wrap: nowrap;
         padding-bottom: 0;
       }
 
@@ -1072,6 +1071,21 @@ div.dropdown-menu {
   }
 }
 
+.main.container-fluid {
+  transition: .5s ease;
+}
+.main.container-fluid.present-nav {
+  padding-left: 6rem;
+}
+
+.side-nav.collapsed {
+  left: -5rem;
+}
+
+.side-nav.expanded {
+  left: 0;
+}
+
 .side-nav {
   height: 100%;
   display: flex;
@@ -1079,13 +1093,16 @@ div.dropdown-menu {
   position: fixed;
   width: 5rem;
   top: 0;
-  padding-top: 3.5rem;
+  margin-top: 3.9rem;
   align-items: center;
+  border-right: 1px solid #383838;
+  padding-top: 0.2rem;
+  transition: .5s ease;
 
   .nav-link {
     color: #f5f8fa;
     width: 5rem;
-    padding: .8rem 0;
+    padding: 0.8rem 0;
     contain: content;
     gap: 8px;
     display: flex;
@@ -1097,12 +1114,30 @@ div.dropdown-menu {
     }
 
     a span {
-      font-size: .8rem;
+      font-size: 0.8rem;
       font-weight: 400;
       line-height: 1.4rem;
       max-height: 1.4rem;
       margin: 0 auto;
       display: block;
+    }
+  }
+}
+
+.side-nav-toggle {
+  margin-left: -14px;
+  width: 5rem;
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+
+  .navbar-toggler {
+    display: unset;
+    margin-left: 0 !important;
+    border: none;
+
+    svg {
+      height: 24px;
     }
   }
 }

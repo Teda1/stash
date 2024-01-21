@@ -155,6 +155,7 @@ export const App: React.FC = () => {
   // use en-GB as default messages if any messages aren't found in the chosen language
   const [messages, setMessages] = useState<{}>();
   const [customMessages, setCustomMessages] = useState<{}>();
+  const [hideSizeNav, setHideSideNav] = useState<boolean>(true);
 
   useEffect(() => {
     (async () => {
@@ -278,7 +279,9 @@ export const App: React.FC = () => {
   function maybeRenderNavbar() {
     // don't render navbar for setup views
     if (!setupMatch) {
-      return <MainNavbar />;
+      return (
+        <MainNavbar hideSizeNav={hideSizeNav} setHideSideNav={setHideSideNav} />
+      );
     }
   }
 
@@ -373,8 +376,8 @@ export const App: React.FC = () => {
                       {maybeRenderNavbar()}
                       <div
                         className={`main container-fluid ${
-                          appleRendering ? "apple" : ""
-                        }`}
+                          hideSizeNav ? "hidden-nav" : "present-nav"
+                        } ${appleRendering ? "apple" : ""}`}
                       >
                         {renderContent()}
                       </div>
