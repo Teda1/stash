@@ -1,20 +1,19 @@
-import { Button, ButtonGroup } from "react-bootstrap";
+import { Button, ButtonGroup, OverlayTrigger, Tooltip } from "react-bootstrap";
 import React from "react";
 import { Link } from "react-router-dom";
 import * as GQL from "src/core/generated-graphql";
-import {
-  GridCard,
-  HoverPopover,
-  Icon,
-  TagLink,
-  TruncatedText,
-} from "src/components/Shared";
-import { PopoverCountButton } from "src/components/Shared/PopoverCountButton";
-import { NavUtils, TextUtils } from "src/utils";
-import { ConfigurationContext } from "src/hooks/Config";
+import { GridCard } from "../Shared/GridCard";
+import { HoverPopover } from "../Shared/HoverPopover";
+import { Icon } from "../Shared/Icon";
+import { SceneLink, TagLink } from "../Shared/TagLink";
+import { TruncatedText } from "../Shared/TruncatedText";
 import { PerformerPopoverButton } from "../Shared/PerformerPopoverButton";
+import { PopoverCountButton } from "../Shared/PopoverCountButton";
+import NavUtils from "src/utils/navigation";
+import { ConfigurationContext } from "src/hooks/Config";
 import { RatingBanner } from "../Shared/RatingBanner";
 import { faBox, faPlayCircle, faTag } from "@fortawesome/free-solid-svg-icons";
+import { galleryTitle } from "src/core/galleries";
 
 interface IProps {
   gallery: GQL.SlimGalleryDataFragment;
@@ -32,7 +31,7 @@ export const GalleryCard: React.FC<IProps> = (props) => {
     if (props.gallery.scenes.length === 0) return;
 
     const popoverContent = props.gallery.scenes.map((scene) => (
-      <TagLink key={scene.id} scene={scene} />
+      <SceneLink key={scene.id} scene={scene} />
     ));
 
     return (
@@ -53,7 +52,7 @@ export const GalleryCard: React.FC<IProps> = (props) => {
     if (props.gallery.tags.length <= 0) return;
 
     const popoverContent = props.gallery.tags.map((tag) => (
-      <TagLink key={tag.id} tag={tag} tagType="gallery" />
+      <TagLink key={tag.id} tag={tag} linkType="gallery" />
     ));
 
     return (
@@ -100,6 +99,7 @@ export const GalleryCard: React.FC<IProps> = (props) => {
           ) : (
             <img
               className="image-thumbnail"
+              loading="lazy"
               alt={props.gallery.studio.name}
               src={props.gallery.studio.image_path ?? ""}
             />
@@ -112,11 +112,16 @@ export const GalleryCard: React.FC<IProps> = (props) => {
   function maybeRenderOrganized() {
     if (props.gallery.organized) {
       return (
-        <div className="organized">
-          <Button className="minimal">
-            <Icon icon={faBox} />
-          </Button>
-        </div>
+        <OverlayTrigger
+          overlay={<Tooltip id="organised-tooltip">{"Organized"}</Tooltip>}
+          placement="bottom"
+        >
+          <div className="organized">
+            <Button className="minimal">
+              <Icon icon={faBox} />
+            </Button>
+          </div>
+        </OverlayTrigger>
       );
     }
   }
@@ -148,35 +153,30 @@ export const GalleryCard: React.FC<IProps> = (props) => {
     <GridCard
       className={`gallery-card zoom-${props.zoomIndex}`}
       url={`/galleries/${props.gallery.id}`}
-      title={
-        props.gallery.title
-          ? props.gallery.title
-          : TextUtils.fileNameFromPath(props.gallery.path ?? "")
-      }
+      title={galleryTitle(props.gallery)}
       linkClassName="gallery-card-header"
       image={
         <>
           {props.gallery.cover ? (
             <img
+              loading="lazy"
               className="gallery-card-image"
               alt={props.gallery.title ?? ""}
               src={`${props.gallery.cover.paths.thumbnail}`}
             />
           ) : undefined}
-          <RatingBanner rating={props.gallery.rating} />
+          <RatingBanner rating={props.gallery.rating100} />
         </>
       }
       overlays={maybeRenderSceneStudioOverlay()}
       details={
         <div className="gallery-card__details">
           <span className="gallery-card__date">{props.gallery.date}</span>
-          <p>
-            <TruncatedText
-              className="gallery-card__description"
-              text={props.gallery.details}
-              lineCount={3}
-            />
-          </p>
+          <TruncatedText
+            className="gallery-card__description"
+            text={props.gallery.details}
+            lineCount={3}
+          />
         </div>
       }
       popovers={maybeRenderPopoverButtonGroup()}

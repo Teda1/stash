@@ -2,25 +2,33 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
-	"github.com/go-chi/chi"
-	"github.com/stashapp/stash/internal/manager"
+	"github.com/go-chi/chi/v5"
+
+	"github.com/stashapp/stash/internal/static"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/utils"
 )
 
+type TagFinder interface {
+	models.TagGetter
+	GetImage(ctx context.Context, tagID int) ([]byte, error)
+}
+
 type tagRoutes struct {
-	txnManager models.TransactionManager
+	routes
+	tagFinder TagFinder
 }
 
 func (rs tagRoutes) Routes() chi.Router {
 	r := chi.NewRouter()
 
 	r.Route("/{tagId}", func(r chi.Router) {
-		r.Use(TagCtx)
+		r.Use(rs.TagCtx)
 		r.Get("/image", rs.Image)
 	})
 
@@ -33,25 +41,28 @@ func (rs tagRoutes) Image(w http.ResponseWriter, r *http.Request) {
 
 	var image []byte
 	if defaultParam != "true" {
-		err := rs.txnManager.WithReadTxn(r.Context(), func(repo models.ReaderRepository) error {
-			image, _ = repo.Tag().GetImage(tag.ID)
-			return nil
+		readTxnErr := rs.withReadTxn(r, func(ctx context.Context) error {
+			var err error
+			image, err = rs.tagFinder.GetImage(ctx, tag.ID)
+			return err
 		})
-		if err != nil {
-			logger.Warnf("read transaction error while getting tag image: %v", err)
+		if errors.Is(readTxnErr, context.Canceled) {
+			return
+		}
+		if readTxnErr != nil {
+			logger.Warnf("read transaction error on fetch tag image: %v", readTxnErr)
 		}
 	}
 
+	// fallback to default image
 	if len(image) == 0 {
-		image = models.DefaultTagImage
+		image = static.ReadAll(static.DefaultTagImage)
 	}
 
-	if err := utils.ServeImage(image, w, r); err != nil {
-		logger.Warnf("error serving tag image: %v", err)
-	}
+	utils.ServeImage(w, r, image)
 }
 
-func TagCtx(next http.Handler) http.Handler {
+func (rs tagRoutes) TagCtx(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tagID, err := strconv.Atoi(chi.URLParam(r, "tagId"))
 		if err != nil {
@@ -60,11 +71,12 @@ func TagCtx(next http.Handler) http.Handler {
 		}
 
 		var tag *models.Tag
-		if err := manager.GetInstance().TxnManager.WithReadTxn(r.Context(), func(repo models.ReaderRepository) error {
+		_ = rs.withReadTxn(r, func(ctx context.Context) error {
 			var err error
-			tag, err = repo.Tag().Find(tagID)
+			tag, err = rs.tagFinder.Find(ctx, tagID)
 			return err
-		}); err != nil {
+		})
+		if tag == nil {
 			http.Error(w, http.StatusText(404), 404)
 			return
 		}

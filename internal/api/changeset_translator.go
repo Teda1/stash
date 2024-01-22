@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
-	"database/sql"
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/99designs/gqlgen/graphql"
+
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/sliceutil/stringslice"
 )
 
 const updateInputField = "input"
@@ -18,19 +21,35 @@ func getArgumentMap(ctx context.Context) map[string]interface{} {
 }
 
 func getUpdateInputMap(ctx context.Context) map[string]interface{} {
+	return getNamedUpdateInputMap(ctx, updateInputField)
+}
+
+func getNamedUpdateInputMap(ctx context.Context, field string) map[string]interface{} {
 	args := getArgumentMap(ctx)
 
-	input := args[updateInputField]
-	var ret map[string]interface{}
-	if input != nil {
-		ret, _ = input.(map[string]interface{})
+	// field can be qualified
+	fields := strings.Split(field, ".")
+
+	currArgs := args
+
+	for _, f := range fields {
+		v, found := currArgs[f]
+		if !found {
+			currArgs = nil
+			break
+		}
+
+		currArgs, _ = v.(map[string]interface{})
+		if currArgs == nil {
+			break
+		}
 	}
 
-	if ret == nil {
-		ret = make(map[string]interface{})
+	if currArgs != nil {
+		return currArgs
 	}
 
-	return ret
+	return make(map[string]interface{})
 }
 
 func getUpdateInputMaps(ctx context.Context) []map[string]interface{} {
@@ -74,77 +93,301 @@ func (t changesetTranslator) getFields() []string {
 	return ret
 }
 
-func (t changesetTranslator) nullString(value *string, field string) *sql.NullString {
-	if !t.hasField(field) {
-		return nil
+func (t changesetTranslator) string(value *string) string {
+	if value == nil {
+		return ""
 	}
 
-	ret := &sql.NullString{}
-
-	if value != nil {
-		ret.String = *value
-		ret.Valid = true
-	}
-
-	return ret
+	return *value
 }
 
-func (t changesetTranslator) sqliteDate(value *string, field string) *models.SQLiteDate {
+func (t changesetTranslator) optionalString(value *string, field string) models.OptionalString {
 	if !t.hasField(field) {
-		return nil
+		return models.OptionalString{}
 	}
 
-	ret := &models.SQLiteDate{}
-
-	if value != nil {
-		ret.String = *value
-		ret.Valid = true
-	}
-
-	return ret
+	return models.NewOptionalStringPtr(value)
 }
 
-func (t changesetTranslator) nullInt64(value *int, field string) *sql.NullInt64 {
+func (t changesetTranslator) optionalDate(value *string, field string) (models.OptionalDate, error) {
 	if !t.hasField(field) {
-		return nil
+		return models.OptionalDate{}, nil
 	}
 
-	ret := &sql.NullInt64{}
-
-	if value != nil {
-		ret.Int64 = int64(*value)
-		ret.Valid = true
+	if value == nil || *value == "" {
+		return models.OptionalDate{
+			Set:  true,
+			Null: true,
+		}, nil
 	}
 
-	return ret
+	date, err := models.ParseDate(*value)
+	if err != nil {
+		return models.OptionalDate{}, err
+	}
+
+	return models.NewOptionalDate(date), nil
 }
 
-func (t changesetTranslator) nullInt64FromString(value *string, field string) *sql.NullInt64 {
-	if !t.hasField(field) {
-		return nil
+func (t changesetTranslator) datePtr(value *string) (*models.Date, error) {
+	if value == nil || *value == "" {
+		return nil, nil
 	}
 
-	ret := &sql.NullInt64{}
-
-	if value != nil {
-		ret.Int64, _ = strconv.ParseInt(*value, 10, 64)
-		ret.Valid = true
+	date, err := models.ParseDate(*value)
+	if err != nil {
+		return nil, err
 	}
-
-	return ret
+	return &date, nil
 }
 
-func (t changesetTranslator) nullBool(value *bool, field string) *sql.NullBool {
+func (t changesetTranslator) intPtrFromString(value *string) (*int, error) {
+	if value == nil || *value == "" {
+		return nil, nil
+	}
+
+	vv, err := strconv.Atoi(*value)
+	if err != nil {
+		return nil, fmt.Errorf("converting %v to int: %w", *value, err)
+	}
+	return &vv, nil
+}
+
+func (t changesetTranslator) optionalInt(value *int, field string) models.OptionalInt {
+	if !t.hasField(field) {
+		return models.OptionalInt{}
+	}
+
+	return models.NewOptionalIntPtr(value)
+}
+
+func (t changesetTranslator) optionalIntFromString(value *string, field string) (models.OptionalInt, error) {
+	if !t.hasField(field) {
+		return models.OptionalInt{}, nil
+	}
+
+	if value == nil {
+		return models.OptionalInt{
+			Set:  true,
+			Null: true,
+		}, nil
+	}
+
+	vv, err := strconv.Atoi(*value)
+	if err != nil {
+		return models.OptionalInt{}, fmt.Errorf("converting %v to int: %w", *value, err)
+	}
+	return models.NewOptionalInt(vv), nil
+}
+
+func (t changesetTranslator) bool(value *bool) bool {
+	if value == nil {
+		return false
+	}
+
+	return *value
+}
+
+func (t changesetTranslator) optionalBool(value *bool, field string) models.OptionalBool {
+	if !t.hasField(field) {
+		return models.OptionalBool{}
+	}
+
+	return models.NewOptionalBoolPtr(value)
+}
+
+func (t changesetTranslator) optionalFloat64(value *float64, field string) models.OptionalFloat64 {
+	if !t.hasField(field) {
+		return models.OptionalFloat64{}
+	}
+
+	return models.NewOptionalFloat64Ptr(value)
+}
+
+func (t changesetTranslator) fileIDPtrFromString(value *string) (*models.FileID, error) {
+	if value == nil || *value == "" {
+		return nil, nil
+	}
+
+	vv, err := strconv.Atoi(*value)
+	if err != nil {
+		return nil, fmt.Errorf("converting %v to int: %w", *value, err)
+	}
+
+	id := models.FileID(vv)
+	return &id, nil
+}
+
+func (t changesetTranslator) fileIDSliceFromStringSlice(value []string) ([]models.FileID, error) {
+	ints, err := stringslice.StringSliceToIntSlice(value)
+	if err != nil {
+		return nil, err
+	}
+
+	fileIDs := make([]models.FileID, len(ints))
+	for i, v := range ints {
+		fileIDs[i] = models.FileID(v)
+	}
+
+	return fileIDs, nil
+}
+
+func (t changesetTranslator) relatedIds(value []string) (models.RelatedIDs, error) {
+	ids, err := stringslice.StringSliceToIntSlice(value)
+	if err != nil {
+		return models.RelatedIDs{}, err
+	}
+
+	return models.NewRelatedIDs(ids), nil
+}
+
+func (t changesetTranslator) updateIds(value []string, field string) (*models.UpdateIDs, error) {
+	if !t.hasField(field) {
+		return nil, nil
+	}
+
+	ids, err := stringslice.StringSliceToIntSlice(value)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.UpdateIDs{
+		IDs:  ids,
+		Mode: models.RelationshipUpdateModeSet,
+	}, nil
+}
+
+func (t changesetTranslator) updateIdsBulk(value *BulkUpdateIds, field string) (*models.UpdateIDs, error) {
+	if !t.hasField(field) || value == nil {
+		return nil, nil
+	}
+
+	ids, err := stringslice.StringSliceToIntSlice(value.Ids)
+	if err != nil {
+		return nil, fmt.Errorf("converting ids [%v]: %w", value.Ids, err)
+	}
+
+	return &models.UpdateIDs{
+		IDs:  ids,
+		Mode: value.Mode,
+	}, nil
+}
+
+func (t changesetTranslator) optionalURLs(value []string, legacyValue *string) *models.UpdateStrings {
+	const (
+		legacyField = "url"
+		field       = "urls"
+	)
+
+	// prefer urls over url
+	if t.hasField(field) {
+		return t.updateStrings(value, field)
+	} else if t.hasField(legacyField) {
+		var valueSlice []string
+		if legacyValue != nil {
+			valueSlice = []string{*legacyValue}
+		}
+		return t.updateStrings(valueSlice, legacyField)
+	}
+
+	return nil
+}
+
+func (t changesetTranslator) optionalURLsBulk(value *BulkUpdateStrings, legacyValue *string) *models.UpdateStrings {
+	const (
+		legacyField = "url"
+		field       = "urls"
+	)
+
+	// prefer urls over url
+	if t.hasField("urls") {
+		return t.updateStringsBulk(value, field)
+	} else if t.hasField(legacyField) {
+		var valueSlice []string
+		if legacyValue != nil {
+			valueSlice = []string{*legacyValue}
+		}
+		return t.updateStrings(valueSlice, legacyField)
+	}
+
+	return nil
+}
+
+func (t changesetTranslator) updateStrings(value []string, field string) *models.UpdateStrings {
 	if !t.hasField(field) {
 		return nil
 	}
 
-	ret := &sql.NullBool{}
+	return &models.UpdateStrings{
+		Values: value,
+		Mode:   models.RelationshipUpdateModeSet,
+	}
+}
 
-	if value != nil {
-		ret.Bool = *value
-		ret.Valid = true
+func (t changesetTranslator) updateStringsBulk(value *BulkUpdateStrings, field string) *models.UpdateStrings {
+	if !t.hasField(field) || value == nil {
+		return nil
 	}
 
-	return ret
+	return &models.UpdateStrings{
+		Values: value.Values,
+		Mode:   value.Mode,
+	}
+}
+
+func (t changesetTranslator) updateStashIDs(value []models.StashID, field string) *models.UpdateStashIDs {
+	if !t.hasField(field) {
+		return nil
+	}
+
+	return &models.UpdateStashIDs{
+		StashIDs: value,
+		Mode:     models.RelationshipUpdateModeSet,
+	}
+}
+
+func (t changesetTranslator) relatedMovies(value []models.SceneMovieInput) (models.RelatedMovies, error) {
+	moviesScenes, err := models.MoviesScenesFromInput(value)
+	if err != nil {
+		return models.RelatedMovies{}, err
+	}
+
+	return models.NewRelatedMovies(moviesScenes), nil
+}
+
+func (t changesetTranslator) updateMovieIDs(value []models.SceneMovieInput, field string) (*models.UpdateMovieIDs, error) {
+	if !t.hasField(field) {
+		return nil, nil
+	}
+
+	moviesScenes, err := models.MoviesScenesFromInput(value)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.UpdateMovieIDs{
+		Movies: moviesScenes,
+		Mode:   models.RelationshipUpdateModeSet,
+	}, nil
+}
+
+func (t changesetTranslator) updateMovieIDsBulk(value *BulkUpdateIds, field string) (*models.UpdateMovieIDs, error) {
+	if !t.hasField(field) || value == nil {
+		return nil, nil
+	}
+
+	ids, err := stringslice.StringSliceToIntSlice(value.Ids)
+	if err != nil {
+		return nil, fmt.Errorf("converting ids [%v]: %w", value.Ids, err)
+	}
+
+	movies := make([]models.MoviesScenes, len(ids))
+	for i, id := range ids {
+		movies[i] = models.MoviesScenes{MovieID: id}
+	}
+
+	return &models.UpdateMovieIDs{
+		Movies: movies,
+		Mode:   value.Mode,
+	}, nil
 }

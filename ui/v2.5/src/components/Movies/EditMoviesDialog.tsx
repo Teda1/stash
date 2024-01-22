@@ -3,10 +3,11 @@ import { Form, Col, Row } from "react-bootstrap";
 import { FormattedMessage, useIntl } from "react-intl";
 import { useBulkMovieUpdate } from "src/core/StashService";
 import * as GQL from "src/core/generated-graphql";
-import { Modal, StudioSelect } from "src/components/Shared";
-import { useToast } from "src/hooks";
-import { FormUtils } from "src/utils";
-import { RatingStars } from "../Scenes/SceneDetails/RatingStars";
+import { ModalComponent } from "../Shared/Modal";
+import { StudioSelect } from "../Shared/Select";
+import { useToast } from "src/hooks/Toast";
+import * as FormUtils from "src/utils/form";
+import { RatingSystem } from "../Shared/Rating/RatingSystem";
 import {
   getAggregateInputValue,
   getAggregateRating,
@@ -24,7 +25,7 @@ export const EditMoviesDialog: React.FC<IListOperationProps> = (
 ) => {
   const intl = useIntl();
   const Toast = useToast();
-  const [rating, setRating] = useState<number | undefined>();
+  const [rating100, setRating] = useState<number | undefined>();
   const [studioId, setStudioId] = useState<string | undefined>();
   const [director, setDirector] = useState<string | undefined>();
 
@@ -42,7 +43,7 @@ export const EditMoviesDialog: React.FC<IListOperationProps> = (
     };
 
     // if rating is undefined
-    movieInput.rating = getAggregateInputValue(rating, aggregateRating);
+    movieInput.rating100 = getAggregateInputValue(rating100, aggregateRating);
     movieInput.studio_id = getAggregateInputValue(studioId, aggregateStudioId);
 
     return movieInput;
@@ -52,14 +53,14 @@ export const EditMoviesDialog: React.FC<IListOperationProps> = (
     setIsUpdating(true);
     try {
       await updateMovies();
-      Toast.success({
-        content: intl.formatMessage(
+      Toast.success(
+        intl.formatMessage(
           { id: "toast.updated_entity" },
           {
             entity: intl.formatMessage({ id: "movies" }).toLocaleLowerCase(),
           }
-        ),
-      });
+        )
+      );
       props.onClose(true);
     } catch (e) {
       Toast.error(e);
@@ -77,11 +78,11 @@ export const EditMoviesDialog: React.FC<IListOperationProps> = (
     state.forEach((movie: GQL.MovieDataFragment) => {
       if (first) {
         first = false;
-        updateRating = movie.rating ?? undefined;
+        updateRating = movie.rating100 ?? undefined;
         updateStudioId = movie.studio?.id ?? undefined;
         updateDirector = movie.director ?? undefined;
       } else {
-        if (movie.rating !== updateRating) {
+        if (movie.rating100 !== updateRating) {
           updateRating = undefined;
         }
         if (movie.studio?.id !== updateStudioId) {
@@ -100,7 +101,7 @@ export const EditMoviesDialog: React.FC<IListOperationProps> = (
 
   function render() {
     return (
-      <Modal
+      <ModalComponent
         show
         icon={faPencilAlt}
         header={intl.formatMessage(
@@ -124,9 +125,9 @@ export const EditMoviesDialog: React.FC<IListOperationProps> = (
               title: intl.formatMessage({ id: "rating" }),
             })}
             <Col xs={9}>
-              <RatingStars
-                value={rating}
-                onSetRating={(value) => setRating(value)}
+              <RatingSystem
+                value={rating100}
+                onSetRating={(value) => setRating(value ?? undefined)}
                 disabled={isUpdating}
               />
             </Col>
@@ -158,7 +159,7 @@ export const EditMoviesDialog: React.FC<IListOperationProps> = (
             />
           </Form.Group>
         </Form>
-      </Modal>
+      </ModalComponent>
     );
   }
 

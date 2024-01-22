@@ -3,33 +3,173 @@ import React, { useState } from "react";
 import { useIntl } from "react-intl";
 import { useHistory } from "react-router-dom";
 import Mousetrap from "mousetrap";
-import {
-  FindPerformersQueryResult,
-  SlimPerformerDataFragment,
-} from "src/core/generated-graphql";
+import * as GQL from "src/core/generated-graphql";
 import {
   queryFindPerformers,
+  useFindPerformers,
   usePerformersDestroy,
 } from "src/core/StashService";
-import { usePerformersList } from "src/hooks";
-import { showWhenSelected, PersistanceLevel } from "src/hooks/ListHook";
+import {
+  makeItemList,
+  PersistanceLevel,
+  showWhenSelected,
+} from "../List/ItemList";
 import { ListFilterModel } from "src/models/list-filter/filter";
 import { DisplayMode } from "src/models/list-filter/types";
-import { PerformerTagger } from "src/components/Tagger";
-import { ExportDialog, DeleteEntityDialog } from "src/components/Shared";
+import { PerformerTagger } from "../Tagger/performers/PerformerTagger";
+import { ExportDialog } from "../Shared/ExportDialog";
+import { DeleteEntityDialog } from "../Shared/DeleteEntityDialog";
 import { IPerformerCardExtraCriteria, PerformerCard } from "./PerformerCard";
 import { PerformerListTable } from "./PerformerListTable";
 import { EditPerformersDialog } from "./EditPerformersDialog";
+import { cmToImperial, cmToInches, kgToLbs } from "src/utils/units";
+import TextUtils from "src/utils/text";
+
+const PerformerItemList = makeItemList({
+  filterMode: GQL.FilterMode.Performers,
+  useResult: useFindPerformers,
+  getItems(result: GQL.FindPerformersQueryResult) {
+    return result?.data?.findPerformers?.performers ?? [];
+  },
+  getCount(result: GQL.FindPerformersQueryResult) {
+    return result?.data?.findPerformers?.count ?? 0;
+  },
+});
+
+export const FormatHeight = (height?: number | null) => {
+  const intl = useIntl();
+  if (!height) {
+    return "";
+  }
+
+  const [feet, inches] = cmToImperial(height);
+
+  return (
+    <span className="performer-height">
+      <span className="height-metric">
+        {intl.formatNumber(height, {
+          style: "unit",
+          unit: "centimeter",
+          unitDisplay: "short",
+        })}
+      </span>
+      <span className="height-imperial">
+        {intl.formatNumber(feet, {
+          style: "unit",
+          unit: "foot",
+          unitDisplay: "narrow",
+        })}
+        {intl.formatNumber(inches, {
+          style: "unit",
+          unit: "inch",
+          unitDisplay: "narrow",
+        })}
+      </span>
+    </span>
+  );
+};
+
+export const FormatAge = (
+  birthdate?: string | null,
+  deathdate?: string | null
+) => {
+  if (!birthdate) {
+    return "";
+  }
+  const age = TextUtils.age(birthdate, deathdate);
+
+  return (
+    <span className="performer-age">
+      <span className="age">{age}</span>
+      <span className="birthdate"> ({birthdate})</span>
+    </span>
+  );
+};
+
+export const FormatWeight = (weight?: number | null) => {
+  const intl = useIntl();
+  if (!weight) {
+    return "";
+  }
+
+  const lbs = kgToLbs(weight);
+
+  return (
+    <span className="performer-weight">
+      <span className="weight-metric">
+        {intl.formatNumber(weight, {
+          style: "unit",
+          unit: "kilogram",
+          unitDisplay: "short",
+        })}
+      </span>
+      <span className="weight-imperial">
+        {intl.formatNumber(lbs, {
+          style: "unit",
+          unit: "pound",
+          unitDisplay: "short",
+        })}
+      </span>
+    </span>
+  );
+};
+
+export const FormatCircumcised = (circumcised?: GQL.CircumisedEnum | null) => {
+  const intl = useIntl();
+  if (!circumcised) {
+    return "";
+  }
+
+  return (
+    <span className="penis-circumcised">
+      {intl.formatMessage({
+        id: "circumcised_types." + circumcised,
+      })}
+    </span>
+  );
+};
+
+export const FormatPenisLength = (penis_length?: number | null) => {
+  const intl = useIntl();
+  if (!penis_length) {
+    return "";
+  }
+
+  const inches = cmToInches(penis_length);
+
+  return (
+    <span className="performer-penis-length">
+      <span className="penis-length-metric">
+        {intl.formatNumber(penis_length, {
+          style: "unit",
+          unit: "centimeter",
+          unitDisplay: "short",
+          maximumFractionDigits: 2,
+        })}
+      </span>
+      <span className="penis-length-imperial">
+        {intl.formatNumber(inches, {
+          style: "unit",
+          unit: "inch",
+          unitDisplay: "narrow",
+          maximumFractionDigits: 2,
+        })}
+      </span>
+    </span>
+  );
+};
 
 interface IPerformerList {
   filterHook?: (filter: ListFilterModel) => ListFilterModel;
   persistState?: PersistanceLevel;
+  alterQuery?: boolean;
   extraCriteria?: IPerformerCardExtraCriteria;
 }
 
 export const PerformerList: React.FC<IPerformerList> = ({
   filterHook,
   persistState,
+  alterQuery,
   extraCriteria,
 }) => {
   const intl = useIntl();
@@ -40,7 +180,7 @@ export const PerformerList: React.FC<IPerformerList> = ({
   const otherOperations = [
     {
       text: intl.formatMessage({ id: "actions.open_random" }),
-      onClick: getRandom,
+      onClick: openRandom,
     },
     {
       text: intl.formatMessage({ id: "actions.export" }),
@@ -53,18 +193,36 @@ export const PerformerList: React.FC<IPerformerList> = ({
     },
   ];
 
-  const addKeybinds = (
-    result: FindPerformersQueryResult,
+  function addKeybinds(
+    result: GQL.FindPerformersQueryResult,
     filter: ListFilterModel
-  ) => {
+  ) {
     Mousetrap.bind("p r", () => {
-      getRandom(result, filter);
+      openRandom(result, filter);
     });
 
     return () => {
       Mousetrap.unbind("p r");
     };
-  };
+  }
+
+  async function openRandom(
+    result: GQL.FindPerformersQueryResult,
+    filter: ListFilterModel
+  ) {
+    if (result.data?.findPerformers) {
+      const { count } = result.data.findPerformers;
+      const index = Math.floor(Math.random() * count);
+      const filterCopy = cloneDeep(filter);
+      filterCopy.itemsPerPage = 1;
+      filterCopy.currentPage = index + 1;
+      const singleResult = await queryFindPerformers(filterCopy);
+      if (singleResult.data.findPerformers.performers.length === 1) {
+        const { id } = singleResult.data.findPerformers.performers[0]!;
+        history.push(`/performers/${id}`);
+      }
+    }
+  }
 
   async function onExport() {
     setIsExportAll(false);
@@ -76,96 +234,35 @@ export const PerformerList: React.FC<IPerformerList> = ({
     setIsExportDialogOpen(true);
   }
 
-  function maybeRenderPerformerExportDialog(selectedIds: Set<string>) {
-    if (isExportDialogOpen) {
-      return (
-        <>
-          <ExportDialog
-            exportInput={{
-              performers: {
-                ids: Array.from(selectedIds.values()),
-                all: isExportAll,
-              },
-            }}
-            onClose={() => {
-              setIsExportDialogOpen(false);
-            }}
-          />
-        </>
-      );
-    }
-  }
-
-  function renderEditPerformersDialog(
-    selectedPerformers: SlimPerformerDataFragment[],
-    onClose: (applied: boolean) => void
+  function renderContent(
+    result: GQL.FindPerformersQueryResult,
+    filter: ListFilterModel,
+    selectedIds: Set<string>,
+    onSelectChange: (id: string, selected: boolean, shiftKey: boolean) => void
   ) {
-    return (
-      <>
-        <EditPerformersDialog selected={selectedPerformers} onClose={onClose} />
-      </>
-    );
-  }
-
-  const renderDeleteDialog = (
-    selectedPerformers: SlimPerformerDataFragment[],
-    onClose: (confirmed: boolean) => void
-  ) => (
-    <DeleteEntityDialog
-      selected={selectedPerformers}
-      onClose={onClose}
-      singularEntity={intl.formatMessage({ id: "performer" })}
-      pluralEntity={intl.formatMessage({ id: "performers" })}
-      destroyMutation={usePerformersDestroy}
-    />
-  );
-
-  const listData = usePerformersList({
-    otherOperations,
-    renderContent,
-    renderEditDialog: renderEditPerformersDialog,
-    filterHook,
-    addKeybinds,
-    selectable: true,
-    persistState,
-    renderDeleteDialog,
-  });
-
-  async function getRandom(
-    result: FindPerformersQueryResult,
-    filter: ListFilterModel
-  ) {
-    if (result.data?.findPerformers) {
-      const { count } = result.data.findPerformers;
-      const index = Math.floor(Math.random() * count);
-      const filterCopy = cloneDeep(filter);
-      filterCopy.itemsPerPage = 1;
-      filterCopy.currentPage = index + 1;
-      const singleResult = await queryFindPerformers(filterCopy);
-      if (
-        singleResult &&
-        singleResult.data &&
-        singleResult.data.findPerformers &&
-        singleResult.data.findPerformers.performers.length === 1
-      ) {
-        const { id } = singleResult!.data!.findPerformers!.performers[0]!;
-        history.push(`/performers/${id}`);
+    function maybeRenderPerformerExportDialog() {
+      if (isExportDialogOpen) {
+        return (
+          <>
+            <ExportDialog
+              exportInput={{
+                performers: {
+                  ids: Array.from(selectedIds.values()),
+                  all: isExportAll,
+                },
+              }}
+              onClose={() => setIsExportDialogOpen(false)}
+            />
+          </>
+        );
       }
     }
-  }
 
-  function renderContent(
-    result: FindPerformersQueryResult,
-    filter: ListFilterModel,
-    selectedIds: Set<string>
-  ) {
-    if (!result.data?.findPerformers) {
-      return;
-    }
-    if (filter.displayMode === DisplayMode.Grid) {
-      return (
-        <>
-          {maybeRenderPerformerExportDialog(selectedIds)}
+    function renderPerformers() {
+      if (!result.data?.findPerformers) return;
+
+      if (filter.displayMode === DisplayMode.Grid) {
+        return (
           <div className="row justify-content-center">
             {result.data.findPerformers.performers.map((p) => (
               <PerformerCard
@@ -174,28 +271,73 @@ export const PerformerList: React.FC<IPerformerList> = ({
                 selecting={selectedIds.size > 0}
                 selected={selectedIds.has(p.id)}
                 onSelectedChanged={(selected: boolean, shiftKey: boolean) =>
-                  listData.onSelectChange(p.id, selected, shiftKey)
+                  onSelectChange(p.id, selected, shiftKey)
                 }
                 extraCriteria={extraCriteria}
               />
             ))}
           </div>
-        </>
-      );
+        );
+      }
+      if (filter.displayMode === DisplayMode.List) {
+        return (
+          <PerformerListTable
+            performers={result.data.findPerformers.performers}
+            selectedIds={selectedIds}
+            onSelectChange={onSelectChange}
+          />
+        );
+      }
+      if (filter.displayMode === DisplayMode.Tagger) {
+        return (
+          <PerformerTagger performers={result.data.findPerformers.performers} />
+        );
+      }
     }
-    if (filter.displayMode === DisplayMode.List) {
-      return (
-        <PerformerListTable
-          performers={result.data.findPerformers.performers}
-        />
-      );
-    }
-    if (filter.displayMode === DisplayMode.Tagger) {
-      return (
-        <PerformerTagger performers={result.data.findPerformers.performers} />
-      );
-    }
+
+    return (
+      <>
+        {maybeRenderPerformerExportDialog()}
+        {renderPerformers()}
+      </>
+    );
   }
 
-  return listData.template;
+  function renderEditDialog(
+    selectedPerformers: GQL.SlimPerformerDataFragment[],
+    onClose: (applied: boolean) => void
+  ) {
+    return (
+      <EditPerformersDialog selected={selectedPerformers} onClose={onClose} />
+    );
+  }
+
+  function renderDeleteDialog(
+    selectedPerformers: GQL.SlimPerformerDataFragment[],
+    onClose: (confirmed: boolean) => void
+  ) {
+    return (
+      <DeleteEntityDialog
+        selected={selectedPerformers}
+        onClose={onClose}
+        singularEntity={intl.formatMessage({ id: "performer" })}
+        pluralEntity={intl.formatMessage({ id: "performers" })}
+        destroyMutation={usePerformersDestroy}
+      />
+    );
+  }
+
+  return (
+    <PerformerItemList
+      selectable
+      filterHook={filterHook}
+      persistState={persistState}
+      alterQuery={alterQuery}
+      otherOperations={otherOperations}
+      addKeybinds={addKeybinds}
+      renderContent={renderContent}
+      renderEditDialog={renderEditDialog}
+      renderDeleteDialog={renderDeleteDialog}
+    />
+  );
 };

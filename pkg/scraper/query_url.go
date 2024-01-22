@@ -13,15 +13,20 @@ type queryURLParameters map[string]string
 
 func queryURLParametersFromScene(scene *models.Scene) queryURLParameters {
 	ret := make(queryURLParameters)
-	ret["checksum"] = scene.Checksum.String
-	ret["oshash"] = scene.OSHash.String
+	ret["checksum"] = scene.Checksum
+	ret["oshash"] = scene.OSHash
 	ret["filename"] = filepath.Base(scene.Path)
-	ret["title"] = scene.Title.String
-	ret["url"] = scene.URL.String
+
+	if scene.Title != "" {
+		ret["title"] = scene.Title
+	}
+	if len(scene.URLs.List()) > 0 {
+		ret["url"] = scene.URLs.List()[0]
+	}
 	return ret
 }
 
-func queryURLParametersFromScrapedScene(scene models.ScrapedSceneInput) queryURLParameters {
+func queryURLParametersFromScrapedScene(scene ScrapedSceneInput) queryURLParameters {
 	ret := make(queryURLParameters)
 
 	setField := func(field string, value *string) {
@@ -31,9 +36,15 @@ func queryURLParametersFromScrapedScene(scene models.ScrapedSceneInput) queryURL
 	}
 
 	setField("title", scene.Title)
-	setField("url", scene.URL)
+	setField("code", scene.Code)
+	if len(scene.URLs) > 0 {
+		setField("url", &scene.URLs[0])
+	} else {
+		setField("url", scene.URL)
+	}
 	setField("date", scene.Date)
 	setField("details", scene.Details)
+	setField("director", scene.Director)
 	setField("remote_site_id", scene.RemoteSiteID)
 	return ret
 }
@@ -46,13 +57,18 @@ func queryURLParameterFromURL(url string) queryURLParameters {
 
 func queryURLParametersFromGallery(gallery *models.Gallery) queryURLParameters {
 	ret := make(queryURLParameters)
-	ret["checksum"] = gallery.Checksum
+	ret["checksum"] = gallery.PrimaryChecksum()
 
-	if gallery.Path.Valid {
-		ret["filename"] = filepath.Base(gallery.Path.String)
+	if gallery.Path != "" {
+		ret["filename"] = filepath.Base(gallery.Path)
 	}
-	ret["title"] = gallery.Title.String
-	ret["url"] = gallery.URL.String
+	if gallery.Title != "" {
+		ret["title"] = gallery.Title
+	}
+
+	if len(gallery.URLs.List()) > 0 {
+		ret["url"] = gallery.URLs.List()[0]
+	}
 
 	return ret
 }

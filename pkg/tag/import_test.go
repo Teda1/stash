@@ -1,6 +1,7 @@
 package tag
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -23,6 +24,8 @@ const (
 	existingTagID = 100
 )
 
+var testCtx = context.Background()
+
 func TestImporterName(t *testing.T) {
 	i := Importer{
 		Input: jsonschema.Tag{
@@ -37,27 +40,28 @@ func TestImporterPreImport(t *testing.T) {
 	i := Importer{
 		Input: jsonschema.Tag{
 			Name:          tagName,
+			Description:   description,
 			Image:         invalidImage,
 			IgnoreAutoTag: autoTagIgnored,
 		},
 	}
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 
 	assert.NotNil(t, err)
 
 	i.Input.Image = image
 
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 
 	assert.Nil(t, err)
 }
 
 func TestImporterPostImport(t *testing.T) {
-	readerWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Tag,
 		Input: jsonschema.Tag{
 			Aliases: []string{"alias"},
 		},
@@ -68,48 +72,48 @@ func TestImporterPostImport(t *testing.T) {
 	updateTagAliasErr := errors.New("UpdateAlias error")
 	updateTagParentsErr := errors.New("UpdateParentTags error")
 
-	readerWriter.On("UpdateAliases", tagID, i.Input.Aliases).Return(nil).Once()
-	readerWriter.On("UpdateAliases", errAliasID, i.Input.Aliases).Return(updateTagAliasErr).Once()
-	readerWriter.On("UpdateAliases", withParentsID, i.Input.Aliases).Return(nil).Once()
-	readerWriter.On("UpdateAliases", errParentsID, i.Input.Aliases).Return(nil).Once()
+	db.Tag.On("UpdateAliases", testCtx, tagID, i.Input.Aliases).Return(nil).Once()
+	db.Tag.On("UpdateAliases", testCtx, errAliasID, i.Input.Aliases).Return(updateTagAliasErr).Once()
+	db.Tag.On("UpdateAliases", testCtx, withParentsID, i.Input.Aliases).Return(nil).Once()
+	db.Tag.On("UpdateAliases", testCtx, errParentsID, i.Input.Aliases).Return(nil).Once()
 
-	readerWriter.On("UpdateImage", tagID, imageBytes).Return(nil).Once()
-	readerWriter.On("UpdateImage", errAliasID, imageBytes).Return(nil).Once()
-	readerWriter.On("UpdateImage", errImageID, imageBytes).Return(updateTagImageErr).Once()
-	readerWriter.On("UpdateImage", withParentsID, imageBytes).Return(nil).Once()
-	readerWriter.On("UpdateImage", errParentsID, imageBytes).Return(nil).Once()
+	db.Tag.On("UpdateImage", testCtx, tagID, imageBytes).Return(nil).Once()
+	db.Tag.On("UpdateImage", testCtx, errAliasID, imageBytes).Return(nil).Once()
+	db.Tag.On("UpdateImage", testCtx, errImageID, imageBytes).Return(updateTagImageErr).Once()
+	db.Tag.On("UpdateImage", testCtx, withParentsID, imageBytes).Return(nil).Once()
+	db.Tag.On("UpdateImage", testCtx, errParentsID, imageBytes).Return(nil).Once()
 
 	var parentTags []int
-	readerWriter.On("UpdateParentTags", tagID, parentTags).Return(nil).Once()
-	readerWriter.On("UpdateParentTags", withParentsID, []int{100}).Return(nil).Once()
-	readerWriter.On("UpdateParentTags", errParentsID, []int{100}).Return(updateTagParentsErr).Once()
+	db.Tag.On("UpdateParentTags", testCtx, tagID, parentTags).Return(nil).Once()
+	db.Tag.On("UpdateParentTags", testCtx, withParentsID, []int{100}).Return(nil).Once()
+	db.Tag.On("UpdateParentTags", testCtx, errParentsID, []int{100}).Return(updateTagParentsErr).Once()
 
-	readerWriter.On("FindByName", "Parent", false).Return(&models.Tag{ID: 100}, nil)
+	db.Tag.On("FindByName", testCtx, "Parent", false).Return(&models.Tag{ID: 100}, nil)
 
-	err := i.PostImport(tagID)
+	err := i.PostImport(testCtx, tagID)
 	assert.Nil(t, err)
 
-	err = i.PostImport(errImageID)
+	err = i.PostImport(testCtx, errImageID)
 	assert.NotNil(t, err)
 
-	err = i.PostImport(errAliasID)
+	err = i.PostImport(testCtx, errAliasID)
 	assert.NotNil(t, err)
 
 	i.Input.Parents = []string{"Parent"}
-	err = i.PostImport(withParentsID)
+	err = i.PostImport(testCtx, withParentsID)
 	assert.Nil(t, err)
 
-	err = i.PostImport(errParentsID)
+	err = i.PostImport(testCtx, errParentsID)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPostImportParentMissing(t *testing.T) {
-	readerWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Tag,
 		Input:        jsonschema.Tag{},
 		imageData:    imageBytes,
 	}
@@ -129,111 +133,118 @@ func TestImporterPostImportParentMissing(t *testing.T) {
 
 	var emptyParents []int
 
-	readerWriter.On("UpdateImage", mock.Anything, mock.Anything).Return(nil)
-	readerWriter.On("UpdateAliases", mock.Anything, mock.Anything).Return(nil)
+	db.Tag.On("UpdateImage", testCtx, mock.Anything, mock.Anything).Return(nil)
+	db.Tag.On("UpdateAliases", testCtx, mock.Anything, mock.Anything).Return(nil)
 
-	readerWriter.On("FindByName", "Create", false).Return(nil, nil).Once()
-	readerWriter.On("FindByName", "CreateError", false).Return(nil, nil).Once()
-	readerWriter.On("FindByName", "CreateFindError", false).Return(nil, findError).Once()
-	readerWriter.On("FindByName", "CreateFound", false).Return(&models.Tag{ID: 101}, nil).Once()
-	readerWriter.On("FindByName", "Fail", false).Return(nil, nil).Once()
-	readerWriter.On("FindByName", "FailFindError", false).Return(nil, findError)
-	readerWriter.On("FindByName", "FailFound", false).Return(&models.Tag{ID: 102}, nil).Once()
-	readerWriter.On("FindByName", "Ignore", false).Return(nil, nil).Once()
-	readerWriter.On("FindByName", "IgnoreFindError", false).Return(nil, findError)
-	readerWriter.On("FindByName", "IgnoreFound", false).Return(&models.Tag{ID: 103}, nil).Once()
+	db.Tag.On("FindByName", testCtx, "Create", false).Return(nil, nil).Once()
+	db.Tag.On("FindByName", testCtx, "CreateError", false).Return(nil, nil).Once()
+	db.Tag.On("FindByName", testCtx, "CreateFindError", false).Return(nil, findError).Once()
+	db.Tag.On("FindByName", testCtx, "CreateFound", false).Return(&models.Tag{ID: 101}, nil).Once()
+	db.Tag.On("FindByName", testCtx, "Fail", false).Return(nil, nil).Once()
+	db.Tag.On("FindByName", testCtx, "FailFindError", false).Return(nil, findError)
+	db.Tag.On("FindByName", testCtx, "FailFound", false).Return(&models.Tag{ID: 102}, nil).Once()
+	db.Tag.On("FindByName", testCtx, "Ignore", false).Return(nil, nil).Once()
+	db.Tag.On("FindByName", testCtx, "IgnoreFindError", false).Return(nil, findError)
+	db.Tag.On("FindByName", testCtx, "IgnoreFound", false).Return(&models.Tag{ID: 103}, nil).Once()
 
-	readerWriter.On("UpdateParentTags", createID, []int{100}).Return(nil).Once()
-	readerWriter.On("UpdateParentTags", createFoundID, []int{101}).Return(nil).Once()
-	readerWriter.On("UpdateParentTags", failFoundID, []int{102}).Return(nil).Once()
-	readerWriter.On("UpdateParentTags", ignoreID, emptyParents).Return(nil).Once()
-	readerWriter.On("UpdateParentTags", ignoreFoundID, []int{103}).Return(nil).Once()
+	db.Tag.On("UpdateParentTags", testCtx, createID, []int{100}).Return(nil).Once()
+	db.Tag.On("UpdateParentTags", testCtx, createFoundID, []int{101}).Return(nil).Once()
+	db.Tag.On("UpdateParentTags", testCtx, failFoundID, []int{102}).Return(nil).Once()
+	db.Tag.On("UpdateParentTags", testCtx, ignoreID, emptyParents).Return(nil).Once()
+	db.Tag.On("UpdateParentTags", testCtx, ignoreFoundID, []int{103}).Return(nil).Once()
 
-	readerWriter.On("Create", mock.MatchedBy(func(t models.Tag) bool { return t.Name == "Create" })).Return(&models.Tag{ID: 100}, nil).Once()
-	readerWriter.On("Create", mock.MatchedBy(func(t models.Tag) bool { return t.Name == "CreateError" })).Return(nil, errors.New("failed creating parent")).Once()
+	db.Tag.On("Create", testCtx, mock.MatchedBy(func(t *models.Tag) bool {
+		return t.Name == "Create"
+	})).Run(func(args mock.Arguments) {
+		t := args.Get(1).(*models.Tag)
+		t.ID = 100
+	}).Return(nil).Once()
+	db.Tag.On("Create", testCtx, mock.MatchedBy(func(t *models.Tag) bool {
+		return t.Name == "CreateError"
+	})).Return(errors.New("failed creating parent")).Once()
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumCreate
 	i.Input.Parents = []string{"Create"}
-	err := i.PostImport(createID)
+	err := i.PostImport(testCtx, createID)
 	assert.Nil(t, err)
 
 	i.Input.Parents = []string{"CreateError"}
-	err = i.PostImport(createErrorID)
+	err = i.PostImport(testCtx, createErrorID)
 	assert.NotNil(t, err)
 
 	i.Input.Parents = []string{"CreateFindError"}
-	err = i.PostImport(createFindErrorID)
+	err = i.PostImport(testCtx, createFindErrorID)
 	assert.NotNil(t, err)
 
 	i.Input.Parents = []string{"CreateFound"}
-	err = i.PostImport(createFoundID)
+	err = i.PostImport(testCtx, createFoundID)
 	assert.Nil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumFail
 	i.Input.Parents = []string{"Fail"}
-	err = i.PostImport(failID)
+	err = i.PostImport(testCtx, failID)
 	assert.NotNil(t, err)
 
 	i.Input.Parents = []string{"FailFindError"}
-	err = i.PostImport(failFindErrorID)
+	err = i.PostImport(testCtx, failFindErrorID)
 	assert.NotNil(t, err)
 
 	i.Input.Parents = []string{"FailFound"}
-	err = i.PostImport(failFoundID)
+	err = i.PostImport(testCtx, failFoundID)
 	assert.Nil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumIgnore
 	i.Input.Parents = []string{"Ignore"}
-	err = i.PostImport(ignoreID)
+	err = i.PostImport(testCtx, ignoreID)
 	assert.Nil(t, err)
 
 	i.Input.Parents = []string{"IgnoreFindError"}
-	err = i.PostImport(ignoreFindErrorID)
+	err = i.PostImport(testCtx, ignoreFindErrorID)
 	assert.NotNil(t, err)
 
 	i.Input.Parents = []string{"IgnoreFound"}
-	err = i.PostImport(ignoreFoundID)
+	err = i.PostImport(testCtx, ignoreFoundID)
 	assert.Nil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterFindExistingID(t *testing.T) {
-	readerWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Tag,
 		Input: jsonschema.Tag{
 			Name: tagName,
 		},
 	}
 
 	errFindByName := errors.New("FindByName error")
-	readerWriter.On("FindByName", tagName, false).Return(nil, nil).Once()
-	readerWriter.On("FindByName", existingTagName, false).Return(&models.Tag{
+	db.Tag.On("FindByName", testCtx, tagName, false).Return(nil, nil).Once()
+	db.Tag.On("FindByName", testCtx, existingTagName, false).Return(&models.Tag{
 		ID: existingTagID,
 	}, nil).Once()
-	readerWriter.On("FindByName", tagNameErr, false).Return(nil, errFindByName).Once()
+	db.Tag.On("FindByName", testCtx, tagNameErr, false).Return(nil, errFindByName).Once()
 
-	id, err := i.FindExistingID()
+	id, err := i.FindExistingID(testCtx)
 	assert.Nil(t, id)
 	assert.Nil(t, err)
 
 	i.Input.Name = existingTagName
-	id, err = i.FindExistingID()
+	id, err = i.FindExistingID(testCtx)
 	assert.Equal(t, existingTagID, *id)
 	assert.Nil(t, err)
 
 	i.Input.Name = tagNameErr
-	id, err = i.FindExistingID()
+	id, err = i.FindExistingID(testCtx)
 	assert.Nil(t, id)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestCreate(t *testing.T) {
-	readerWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	tag := models.Tag{
 		Name: tagName,
@@ -244,30 +255,31 @@ func TestCreate(t *testing.T) {
 	}
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Tag,
 		tag:          tag,
 	}
 
 	errCreate := errors.New("Create error")
-	readerWriter.On("Create", tag).Return(&models.Tag{
-		ID: tagID,
-	}, nil).Once()
-	readerWriter.On("Create", tagErr).Return(nil, errCreate).Once()
+	db.Tag.On("Create", testCtx, &tag).Run(func(args mock.Arguments) {
+		t := args.Get(1).(*models.Tag)
+		t.ID = tagID
+	}).Return(nil).Once()
+	db.Tag.On("Create", testCtx, &tagErr).Return(errCreate).Once()
 
-	id, err := i.Create()
+	id, err := i.Create(testCtx)
 	assert.Equal(t, tagID, *id)
 	assert.Nil(t, err)
 
 	i.tag = tagErr
-	id, err = i.Create()
+	id, err = i.Create(testCtx)
 	assert.Nil(t, id)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestUpdate(t *testing.T) {
-	readerWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	tag := models.Tag{
 		Name: tagName,
@@ -278,7 +290,7 @@ func TestUpdate(t *testing.T) {
 	}
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Tag,
 		tag:          tag,
 	}
 
@@ -286,19 +298,19 @@ func TestUpdate(t *testing.T) {
 
 	// id needs to be set for the mock input
 	tag.ID = tagID
-	readerWriter.On("UpdateFull", tag).Return(nil, nil).Once()
+	db.Tag.On("Update", testCtx, &tag).Return(nil).Once()
 
-	err := i.Update(tagID)
+	err := i.Update(testCtx, tagID)
 	assert.Nil(t, err)
 
 	i.tag = tagErr
 
 	// need to set id separately
 	tagErr.ID = errImageID
-	readerWriter.On("UpdateFull", tagErr).Return(nil, errUpdate).Once()
+	db.Tag.On("Update", testCtx, &tagErr).Return(errUpdate).Once()
 
-	err = i.Update(errImageID)
+	err = i.Update(testCtx, errImageID)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }

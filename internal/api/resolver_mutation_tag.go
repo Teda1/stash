@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
@@ -15,8 +14,8 @@ import (
 )
 
 func (r *mutationResolver) getTag(ctx context.Context, id int) (ret *models.Tag, err error) {
-	if err := r.withReadTxn(ctx, func(repo models.ReaderRepository) error {
-		ret, err = repo.Tag().Find(id)
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		ret, err = r.repository.Tag.Find(ctx, id)
 		return err
 	}); err != nil {
 		return nil, err
@@ -25,87 +24,84 @@ func (r *mutationResolver) getTag(ctx context.Context, id int) (ret *models.Tag,
 	return ret, nil
 }
 
-func (r *mutationResolver) TagCreate(ctx context.Context, input models.TagCreateInput) (*models.Tag, error) {
+func (r *mutationResolver) TagCreate(ctx context.Context, input TagCreateInput) (*models.Tag, error) {
+	translator := changesetTranslator{
+		inputMap: getUpdateInputMap(ctx),
+	}
+
 	// Populate a new tag from the input
-	currentTime := time.Now()
-	newTag := models.Tag{
-		Name:      input.Name,
-		CreatedAt: models.SQLiteTimestamp{Timestamp: currentTime},
-		UpdatedAt: models.SQLiteTimestamp{Timestamp: currentTime},
-	}
+	newTag := models.NewTag()
 
-	if input.IgnoreAutoTag != nil {
-		newTag.IgnoreAutoTag = *input.IgnoreAutoTag
-	}
+	newTag.Name = input.Name
+	newTag.Description = translator.string(input.Description)
+	newTag.IgnoreAutoTag = translator.bool(input.IgnoreAutoTag)
 
-	var imageData []byte
 	var err error
 
-	if input.Image != nil {
-		imageData, err = utils.ProcessImageInput(ctx, *input.Image)
-
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	var parentIDs []int
-	var childIDs []int
-
 	if len(input.ParentIds) > 0 {
 		parentIDs, err = stringslice.StringSliceToIntSlice(input.ParentIds)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("converting parent ids: %w", err)
 		}
 	}
 
+	var childIDs []int
 	if len(input.ChildIds) > 0 {
 		childIDs, err = stringslice.StringSliceToIntSlice(input.ChildIds)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("converting child ids: %w", err)
+		}
+	}
+
+	// Process the base 64 encoded image string
+	var imageData []byte
+	if input.Image != nil {
+		imageData, err = utils.ProcessImageInput(ctx, *input.Image)
+		if err != nil {
+			return nil, fmt.Errorf("processing image: %w", err)
 		}
 	}
 
 	// Start the transaction and save the tag
-	var t *models.Tag
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
-		qb := repo.Tag()
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.Tag
 
 		// ensure name is unique
-		if err := tag.EnsureTagNameUnique(0, newTag.Name, qb); err != nil {
+		if err := tag.EnsureTagNameUnique(ctx, 0, newTag.Name, qb); err != nil {
 			return err
 		}
 
-		t, err = qb.Create(newTag)
+		err = qb.Create(ctx, &newTag)
 		if err != nil {
 			return err
 		}
 
 		// update image table
 		if len(imageData) > 0 {
-			if err := qb.UpdateImage(t.ID, imageData); err != nil {
+			if err := qb.UpdateImage(ctx, newTag.ID, imageData); err != nil {
 				return err
 			}
 		}
 
 		if len(input.Aliases) > 0 {
-			if err := tag.EnsureAliasesUnique(t.ID, input.Aliases, qb); err != nil {
+			if err := tag.EnsureAliasesUnique(ctx, newTag.ID, input.Aliases, qb); err != nil {
 				return err
 			}
 
-			if err := qb.UpdateAliases(t.ID, input.Aliases); err != nil {
+			if err := qb.UpdateAliases(ctx, newTag.ID, input.Aliases); err != nil {
 				return err
 			}
 		}
 
 		if len(parentIDs) > 0 {
-			if err := qb.UpdateParentTags(t.ID, parentIDs); err != nil {
+			if err := qb.UpdateParentTags(ctx, newTag.ID, parentIDs); err != nil {
 				return err
 			}
 		}
 
 		if len(childIDs) > 0 {
-			if err := qb.UpdateChildTags(t.ID, childIDs); err != nil {
+			if err := qb.UpdateChildTags(ctx, newTag.ID, childIDs); err != nil {
 				return err
 			}
 		}
@@ -113,7 +109,7 @@ func (r *mutationResolver) TagCreate(ctx context.Context, input models.TagCreate
 		// FIXME: This should be called before any changes are made, but
 		// requires a rewrite of ValidateHierarchy.
 		if len(parentIDs) > 0 || len(childIDs) > 0 {
-			if err := tag.ValidateHierarchy(t, parentIDs, childIDs, qb); err != nil {
+			if err := tag.ValidateHierarchy(ctx, &newTag, parentIDs, childIDs, qb); err != nil {
 				return err
 			}
 		}
@@ -123,113 +119,104 @@ func (r *mutationResolver) TagCreate(ctx context.Context, input models.TagCreate
 		return nil, err
 	}
 
-	r.hookExecutor.ExecutePostHooks(ctx, t.ID, plugin.TagCreatePost, input, nil)
-	return r.getTag(ctx, t.ID)
+	r.hookExecutor.ExecutePostHooks(ctx, newTag.ID, plugin.TagCreatePost, input, nil)
+	return r.getTag(ctx, newTag.ID)
 }
 
-func (r *mutationResolver) TagUpdate(ctx context.Context, input models.TagUpdateInput) (*models.Tag, error) {
-	// Populate tag from the input
+func (r *mutationResolver) TagUpdate(ctx context.Context, input TagUpdateInput) (*models.Tag, error) {
 	tagID, err := strconv.Atoi(input.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("converting id: %w", err)
 	}
-
-	var imageData []byte
 
 	translator := changesetTranslator{
 		inputMap: getUpdateInputMap(ctx),
 	}
 
-	imageIncluded := translator.hasField("image")
-	if input.Image != nil {
-		imageData, err = utils.ProcessImageInput(ctx, *input.Image)
+	// Populate tag from the input
+	updatedTag := models.NewTagPartial()
 
-		if err != nil {
-			return nil, err
-		}
-	}
+	updatedTag.IgnoreAutoTag = translator.optionalBool(input.IgnoreAutoTag, "ignore_auto_tag")
+	updatedTag.Description = translator.optionalString(input.Description, "description")
 
 	var parentIDs []int
-	var childIDs []int
-
 	if translator.hasField("parent_ids") {
 		parentIDs, err = stringslice.StringSliceToIntSlice(input.ParentIds)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("converting parent ids: %w", err)
 		}
 	}
 
+	var childIDs []int
 	if translator.hasField("child_ids") {
 		childIDs, err = stringslice.StringSliceToIntSlice(input.ChildIds)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("converting child ids: %w", err)
+		}
+	}
+
+	var imageData []byte
+	imageIncluded := translator.hasField("image")
+	if input.Image != nil {
+		imageData, err = utils.ProcessImageInput(ctx, *input.Image)
+		if err != nil {
+			return nil, fmt.Errorf("processing image: %w", err)
 		}
 	}
 
 	// Start the transaction and save the tag
 	var t *models.Tag
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
-		qb := repo.Tag()
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.Tag
 
 		// ensure name is unique
-		t, err = qb.Find(tagID)
+		t, err = qb.Find(ctx, tagID)
 		if err != nil {
 			return err
 		}
 
 		if t == nil {
-			return fmt.Errorf("Tag with ID %d not found", tagID)
-		}
-
-		updatedTag := models.TagPartial{
-			ID:            tagID,
-			IgnoreAutoTag: input.IgnoreAutoTag,
-			UpdatedAt:     &models.SQLiteTimestamp{Timestamp: time.Now()},
+			return fmt.Errorf("tag with id %d not found", tagID)
 		}
 
 		if input.Name != nil && t.Name != *input.Name {
-			if err := tag.EnsureTagNameUnique(tagID, *input.Name, qb); err != nil {
+			if err := tag.EnsureTagNameUnique(ctx, tagID, *input.Name, qb); err != nil {
 				return err
 			}
 
-			updatedTag.Name = input.Name
+			updatedTag.Name = models.NewOptionalString(*input.Name)
 		}
 
-		t, err = qb.Update(updatedTag)
+		t, err = qb.UpdatePartial(ctx, tagID, updatedTag)
 		if err != nil {
 			return err
 		}
 
 		// update image table
-		if len(imageData) > 0 {
-			if err := qb.UpdateImage(tagID, imageData); err != nil {
-				return err
-			}
-		} else if imageIncluded {
-			// must be unsetting
-			if err := qb.DestroyImage(tagID); err != nil {
+		if imageIncluded {
+			if err := qb.UpdateImage(ctx, tagID, imageData); err != nil {
 				return err
 			}
 		}
 
 		if translator.hasField("aliases") {
-			if err := tag.EnsureAliasesUnique(tagID, input.Aliases, qb); err != nil {
+			if err := tag.EnsureAliasesUnique(ctx, tagID, input.Aliases, qb); err != nil {
 				return err
 			}
 
-			if err := qb.UpdateAliases(tagID, input.Aliases); err != nil {
+			if err := qb.UpdateAliases(ctx, tagID, input.Aliases); err != nil {
 				return err
 			}
 		}
 
 		if parentIDs != nil {
-			if err := qb.UpdateParentTags(tagID, parentIDs); err != nil {
+			if err := qb.UpdateParentTags(ctx, tagID, parentIDs); err != nil {
 				return err
 			}
 		}
 
 		if childIDs != nil {
-			if err := qb.UpdateChildTags(tagID, childIDs); err != nil {
+			if err := qb.UpdateChildTags(ctx, tagID, childIDs); err != nil {
 				return err
 			}
 		}
@@ -237,7 +224,7 @@ func (r *mutationResolver) TagUpdate(ctx context.Context, input models.TagUpdate
 		// FIXME: This should be called before any changes are made, but
 		// requires a rewrite of ValidateHierarchy.
 		if parentIDs != nil || childIDs != nil {
-			if err := tag.ValidateHierarchy(t, parentIDs, childIDs, qb); err != nil {
+			if err := tag.ValidateHierarchy(ctx, t, parentIDs, childIDs, qb); err != nil {
 				logger.Errorf("Error saving tag: %s", err)
 				return err
 			}
@@ -252,14 +239,14 @@ func (r *mutationResolver) TagUpdate(ctx context.Context, input models.TagUpdate
 	return r.getTag(ctx, t.ID)
 }
 
-func (r *mutationResolver) TagDestroy(ctx context.Context, input models.TagDestroyInput) (bool, error) {
+func (r *mutationResolver) TagDestroy(ctx context.Context, input TagDestroyInput) (bool, error) {
 	tagID, err := strconv.Atoi(input.ID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("converting id: %w", err)
 	}
 
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
-		return repo.Tag().Destroy(tagID)
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		return r.repository.Tag.Destroy(ctx, tagID)
 	}); err != nil {
 		return false, err
 	}
@@ -272,13 +259,13 @@ func (r *mutationResolver) TagDestroy(ctx context.Context, input models.TagDestr
 func (r *mutationResolver) TagsDestroy(ctx context.Context, tagIDs []string) (bool, error) {
 	ids, err := stringslice.StringSliceToIntSlice(tagIDs)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("converting ids: %w", err)
 	}
 
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
-		qb := repo.Tag()
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.Tag
 		for _, id := range ids {
-			if err := qb.Destroy(id); err != nil {
+			if err := qb.Destroy(ctx, id); err != nil {
 				return err
 			}
 		}
@@ -295,15 +282,15 @@ func (r *mutationResolver) TagsDestroy(ctx context.Context, tagIDs []string) (bo
 	return true, nil
 }
 
-func (r *mutationResolver) TagsMerge(ctx context.Context, input models.TagsMergeInput) (*models.Tag, error) {
+func (r *mutationResolver) TagsMerge(ctx context.Context, input TagsMergeInput) (*models.Tag, error) {
 	source, err := stringslice.StringSliceToIntSlice(input.Source)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("converting source ids: %w", err)
 	}
 
 	destination, err := strconv.Atoi(input.Destination)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("converting destination id: %w", err)
 	}
 
 	if len(source) == 0 {
@@ -311,38 +298,38 @@ func (r *mutationResolver) TagsMerge(ctx context.Context, input models.TagsMerge
 	}
 
 	var t *models.Tag
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
-		qb := repo.Tag()
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.Tag
 
 		var err error
-		t, err = qb.Find(destination)
+		t, err = qb.Find(ctx, destination)
 		if err != nil {
 			return err
 		}
 
 		if t == nil {
-			return fmt.Errorf("Tag with ID %d not found", destination)
+			return fmt.Errorf("tag with id %d not found", destination)
 		}
 
-		parents, children, err := tag.MergeHierarchy(destination, source, qb)
+		parents, children, err := tag.MergeHierarchy(ctx, destination, source, qb)
 		if err != nil {
 			return err
 		}
 
-		if err = qb.Merge(source, destination); err != nil {
+		if err = qb.Merge(ctx, source, destination); err != nil {
 			return err
 		}
 
-		err = qb.UpdateParentTags(destination, parents)
+		err = qb.UpdateParentTags(ctx, destination, parents)
 		if err != nil {
 			return err
 		}
-		err = qb.UpdateChildTags(destination, children)
+		err = qb.UpdateChildTags(ctx, destination, children)
 		if err != nil {
 			return err
 		}
 
-		err = tag.ValidateHierarchy(t, parents, children, qb)
+		err = tag.ValidateHierarchy(ctx, t, parents, children, qb)
 		if err != nil {
 			logger.Errorf("Error merging tag: %s", err)
 			return err
@@ -354,5 +341,6 @@ func (r *mutationResolver) TagsMerge(ctx context.Context, input models.TagsMerge
 	}
 
 	r.hookExecutor.ExecutePostHooks(ctx, t.ID, plugin.TagMergePost, input, nil)
+
 	return t, nil
 }

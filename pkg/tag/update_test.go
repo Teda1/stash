@@ -1,6 +1,7 @@
 package tag
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -218,7 +219,7 @@ func TestEnsureHierarchy(t *testing.T) {
 }
 
 func testEnsureHierarchy(t *testing.T, tc testUniqueHierarchyCase, queryParents, queryChildren bool) {
-	mockTagReader := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	var parentIDs, childIDs []int
 	find := make(map[int]*models.Tag)
@@ -245,33 +246,33 @@ func testEnsureHierarchy(t *testing.T, tc testUniqueHierarchyCase, queryParents,
 
 	if queryParents {
 		parentIDs = nil
-		mockTagReader.On("FindByChildTagID", tc.id).Return(tc.parents, nil).Once()
+		db.Tag.On("FindByChildTagID", testCtx, tc.id).Return(tc.parents, nil).Once()
 	}
 
 	if queryChildren {
 		childIDs = nil
-		mockTagReader.On("FindByParentTagID", tc.id).Return(tc.children, nil).Once()
+		db.Tag.On("FindByParentTagID", testCtx, tc.id).Return(tc.children, nil).Once()
 	}
 
-	mockTagReader.On("FindAllAncestors", mock.AnythingOfType("int"), []int(nil)).Return(func(tagID int, excludeIDs []int) []*models.TagPath {
+	db.Tag.On("FindAllAncestors", testCtx, mock.AnythingOfType("int"), []int(nil)).Return(func(ctx context.Context, tagID int, excludeIDs []int) []*models.TagPath {
 		return tc.onFindAllAncestors
-	}, func(tagID int, excludeIDs []int) error {
+	}, func(ctx context.Context, tagID int, excludeIDs []int) error {
 		if tc.onFindAllAncestors != nil {
 			return nil
 		}
 		return fmt.Errorf("undefined ancestors for: %d", tagID)
 	}).Maybe()
 
-	mockTagReader.On("FindAllDescendants", mock.AnythingOfType("int"), []int(nil)).Return(func(tagID int, excludeIDs []int) []*models.TagPath {
+	db.Tag.On("FindAllDescendants", testCtx, mock.AnythingOfType("int"), []int(nil)).Return(func(ctx context.Context, tagID int, excludeIDs []int) []*models.TagPath {
 		return tc.onFindAllDescendants
-	}, func(tagID int, excludeIDs []int) error {
+	}, func(ctx context.Context, tagID int, excludeIDs []int) error {
 		if tc.onFindAllDescendants != nil {
 			return nil
 		}
 		return fmt.Errorf("undefined descendants for: %d", tagID)
 	}).Maybe()
 
-	res := ValidateHierarchy(testUniqueHierarchyTags[tc.id], parentIDs, childIDs, mockTagReader)
+	res := ValidateHierarchy(testCtx, testUniqueHierarchyTags[tc.id], parentIDs, childIDs, db.Tag)
 
 	assert := assert.New(t)
 
@@ -283,5 +284,5 @@ func testEnsureHierarchy(t *testing.T, tc testUniqueHierarchyCase, queryParents,
 		assert.Nil(res)
 	}
 
-	mockTagReader.AssertExpectations(t)
+	db.AssertExpectations(t)
 }

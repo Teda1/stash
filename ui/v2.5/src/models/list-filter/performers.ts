@@ -3,15 +3,20 @@ import {
   createMandatoryNumberCriterionOption,
   createStringCriterionOption,
   createBooleanCriterionOption,
+  createDateCriterionOption,
+  createMandatoryTimestampCriterionOption,
 } from "./criteria/criterion";
 import { FavoriteCriterionOption } from "./criteria/favorite";
 import { GenderCriterionOption } from "./criteria/gender";
+import { CircumcisedCriterionOption } from "./criteria/circumcised";
 import { PerformerIsMissingCriterionOption } from "./criteria/is-missing";
-import { RatingCriterionOption } from "./criteria/rating";
+import { StashIDCriterionOption } from "./criteria/stash-ids";
 import { StudiosCriterionOption } from "./criteria/studios";
 import { TagsCriterionOption } from "./criteria/tags";
 import { ListFilterOptions } from "./filter-options";
 import { CriterionType, DisplayMode } from "./types";
+import { CountryCriterionOption } from "./criteria/country";
+import { RatingCriterionOption } from "./criteria/rating";
 
 const defaultSortBy = "name";
 const sortByOptions = [
@@ -21,6 +26,7 @@ const sortByOptions = [
   "tag_count",
   "random",
   "rating",
+  "penis_length",
 ]
   .map(ListFilterOptions.createSortBy)
   .concat([
@@ -36,6 +42,10 @@ const sortByOptions = [
       messageID: "gallery_count",
       value: "galleries_count",
     },
+    {
+      messageID: "o_counter",
+      value: "o_counter",
+    },
   ]);
 
 const displayModeOptions = [
@@ -49,40 +59,48 @@ const numberCriteria: CriterionType[] = [
   "death_year",
   "age",
   "weight",
+  "penis_length",
 ];
 
 const stringCriteria: CriterionType[] = [
   "name",
+  "disambiguation",
   "details",
   "ethnicity",
-  "country",
   "hair_color",
   "eye_color",
-  "height",
   "measurements",
   "fake_tits",
   "career_length",
   "tattoos",
   "piercings",
   "aliases",
-  "stash_id",
 ];
 
 const criterionOptions = [
   FavoriteCriterionOption,
   GenderCriterionOption,
+  CircumcisedCriterionOption,
   PerformerIsMissingCriterionOption,
   TagsCriterionOption,
-  RatingCriterionOption,
   StudiosCriterionOption,
+  StashIDCriterionOption,
   createStringCriterionOption("url"),
+  RatingCriterionOption,
   createMandatoryNumberCriterionOption("tag_count"),
   createMandatoryNumberCriterionOption("scene_count"),
   createMandatoryNumberCriterionOption("image_count"),
   createMandatoryNumberCriterionOption("gallery_count"),
+  createMandatoryNumberCriterionOption("o_counter"),
   createBooleanCriterionOption("ignore_auto_tag"),
+  CountryCriterionOption,
+  createNumberCriterionOption("height_cm", "height"),
   ...numberCriteria.map((c) => createNumberCriterionOption(c)),
   ...stringCriteria.map((c) => createStringCriterionOption(c)),
+  createDateCriterionOption("birthdate"),
+  createDateCriterionOption("death_date"),
+  createMandatoryTimestampCriterionOption("created_at"),
+  createMandatoryTimestampCriterionOption("updated_at"),
 ];
 export const PerformerListFilterOptions = new ListFilterOptions(
   defaultSortBy,

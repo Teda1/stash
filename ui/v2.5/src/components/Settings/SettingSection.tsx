@@ -1,12 +1,13 @@
-import React from "react";
+import React, { PropsWithChildren } from "react";
 import { Card } from "react-bootstrap";
 import { useIntl } from "react-intl";
-import { PropsWithChildren } from "react-router/node_modules/@types/react";
+import { useSettings } from "./context";
 
 interface ISettingGroup {
   id?: string;
   headingID?: string;
   subHeadingID?: string;
+  advanced?: boolean;
 }
 
 export const SettingSection: React.FC<PropsWithChildren<ISettingGroup>> = ({
@@ -14,8 +15,12 @@ export const SettingSection: React.FC<PropsWithChildren<ISettingGroup>> = ({
   children,
   headingID,
   subHeadingID,
+  advanced,
 }) => {
   const intl = useIntl();
+  const { advancedMode } = useSettings();
+
+  if (advanced && !advancedMode) return null;
 
   return (
     <div className="setting-section" id={id}>

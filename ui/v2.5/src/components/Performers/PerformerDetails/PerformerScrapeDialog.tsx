@@ -3,23 +3,29 @@ import { useIntl } from "react-intl";
 import * as GQL from "src/core/generated-graphql";
 import {
   ScrapeDialog,
-  ScrapeResult,
   ScrapedInputGroupRow,
-  ScrapedImageRow,
+  ScrapedImagesRow,
   ScrapeDialogRow,
   ScrapedTextAreaRow,
-} from "src/components/Shared/ScrapeDialog";
+  ScrapedCountryRow,
+} from "src/components/Shared/ScrapeDialog/ScrapeDialog";
 import { useTagCreate } from "src/core/StashService";
 import { Form } from "react-bootstrap";
-import { TagSelect } from "src/components/Shared";
-import { useToast } from "src/hooks";
+import { TagSelect } from "src/components/Shared/Select";
+import { useToast } from "src/hooks/Toast";
 import clone from "lodash-es/clone";
 import {
   genderStrings,
   genderToString,
   stringToGender,
 } from "src/utils/gender";
+import {
+  circumcisedStrings,
+  circumcisedToString,
+  stringToCircumcised,
+} from "src/utils/circumcised";
 import { IStashBox } from "./PerformerStashBoxModal";
+import { ScrapeResult } from "src/components/Shared/ScrapeDialog/scrapeResult";
 
 function renderScrapedGender(
   result: ScrapeResult<string>,
@@ -119,6 +125,55 @@ function renderScrapedTagsRow(
   );
 }
 
+function renderScrapedCircumcised(
+  result: ScrapeResult<string>,
+  isNew?: boolean,
+  onChange?: (value: string) => void
+) {
+  const selectOptions = [""].concat(circumcisedStrings);
+
+  return (
+    <Form.Control
+      as="select"
+      className="input-control"
+      disabled={!isNew}
+      plaintext={!isNew}
+      value={isNew ? result.newValue : result.originalValue}
+      onChange={(e) => {
+        if (isNew && onChange) {
+          onChange(e.currentTarget.value);
+        }
+      }}
+    >
+      {selectOptions.map((opt) => (
+        <option value={opt} key={opt}>
+          {opt}
+        </option>
+      ))}
+    </Form.Control>
+  );
+}
+
+function renderScrapedCircumcisedRow(
+  title: string,
+  result: ScrapeResult<string>,
+  onChange: (value: ScrapeResult<string>) => void
+) {
+  return (
+    <ScrapeDialogRow
+      title={title}
+      result={result}
+      renderOriginalField={() => renderScrapedCircumcised(result)}
+      renderNewField={() =>
+        renderScrapedCircumcised(result, true, (value) =>
+          onChange(result.cloneWithValue(value))
+        )
+      }
+      onChange={onChange}
+    />
+  );
+}
+
 interface IPerformerScrapeDialogProps {
   performer: Partial<GQL.PerformerUpdateInput>;
   scraped: GQL.ScrapedPerformer;
@@ -151,8 +206,8 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
     let retEnum: GQL.GenderEnum | undefined;
 
     // try to translate from enum values first
-    const upperGender = scrapedGender?.toUpperCase();
-    const asEnum = genderToString(upperGender as GQL.GenderEnum);
+    const upperGender = scrapedGender.toUpperCase();
+    const asEnum = genderToString(upperGender);
     if (asEnum) {
       retEnum = stringToGender(asEnum);
     } else {
@@ -164,11 +219,41 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
     return genderToString(retEnum);
   }
 
+  function translateScrapedCircumcised(scrapedCircumcised?: string | null) {
+    if (!scrapedCircumcised) {
+      return;
+    }
+
+    let retEnum: GQL.CircumisedEnum | undefined;
+
+    // try to translate from enum values first
+    const upperCircumcised = scrapedCircumcised.toUpperCase();
+    const asEnum = circumcisedToString(upperCircumcised);
+    if (asEnum) {
+      retEnum = stringToCircumcised(asEnum);
+    } else {
+      // try to match against circumcised strings
+      const caseInsensitive = true;
+      retEnum = stringToCircumcised(scrapedCircumcised, caseInsensitive);
+    }
+
+    return circumcisedToString(retEnum);
+  }
+
   const [name, setName] = useState<ScrapeResult<string>>(
     new ScrapeResult<string>(props.performer.name, props.scraped.name)
   );
+  const [disambiguation, setDisambiguation] = useState<ScrapeResult<string>>(
+    new ScrapeResult<string>(
+      props.performer.disambiguation,
+      props.scraped.disambiguation
+    )
+  );
   const [aliases, setAliases] = useState<ScrapeResult<string>>(
-    new ScrapeResult<string>(props.performer.aliases, props.scraped.aliases)
+    new ScrapeResult<string>(
+      props.performer.alias_list?.join(", "),
+      props.scraped.aliases
+    )
   );
   const [birthdate, setBirthdate] = useState<ScrapeResult<string>>(
     new ScrapeResult<string>(props.performer.birthdate, props.scraped.birthdate)
@@ -195,12 +280,21 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
     new ScrapeResult<string>(props.performer.eye_color, props.scraped.eye_color)
   );
   const [height, setHeight] = useState<ScrapeResult<string>>(
-    new ScrapeResult<string>(props.performer.height, props.scraped.height)
+    new ScrapeResult<string>(
+      props.performer.height_cm?.toString(),
+      props.scraped.height
+    )
   );
   const [weight, setWeight] = useState<ScrapeResult<string>>(
     new ScrapeResult<string>(
       props.performer.weight?.toString(),
       props.scraped.weight
+    )
+  );
+  const [penisLength, setPenisLength] = useState<ScrapeResult<string>>(
+    new ScrapeResult<string>(
+      props.performer.penis_length?.toString(),
+      props.scraped.penis_length
     )
   );
   const [measurements, setMeasurements] = useState<ScrapeResult<string>>(
@@ -235,8 +329,14 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
   );
   const [gender, setGender] = useState<ScrapeResult<string>>(
     new ScrapeResult<string>(
-      genderToString(props.performer.gender ?? undefined),
+      genderToString(props.performer.gender),
       translateScrapedGender(props.scraped.gender)
+    )
+  );
+  const [circumcised, setCircumcised] = useState<ScrapeResult<string>>(
+    new ScrapeResult<string>(
+      circumcisedToString(props.performer.circumcised),
+      translateScrapedCircumcised(props.scraped.circumcised)
     )
   );
   const [details, setDetails] = useState<ScrapeResult<string>>(
@@ -314,8 +414,14 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
     )
   );
 
+  const images =
+    props.scraped.images && props.scraped.images.length > 0
+      ? props.scraped.images
+      : [];
+
   const allFields = [
     name,
+    disambiguation,
     aliases,
     birthdate,
     ethnicity,
@@ -324,6 +430,8 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
     height,
     measurements,
     fakeTits,
+    penisLength,
+    circumcised,
     careerLength,
     tattoos,
     piercings,
@@ -340,7 +448,7 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
     remoteSiteID,
   ];
   // don't show the dialog if nothing was scraped
-  if (allFields.every((r) => !r.scraped)) {
+  if (allFields.every((r) => !r.scraped) && newTags.length === 0) {
     props.onClose();
     return <></>;
   }
@@ -369,13 +477,11 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
 
       setNewTags(newTagsClone);
 
-      Toast.success({
-        content: (
-          <span>
-            Created tag: <b>{toCreate.name}</b>
-          </span>
-        ),
-      });
+      Toast.success(
+        <span>
+          Created tag: <b>{toCreate.name}</b>
+        </span>
+      );
     } catch (e) {
       Toast.error(e);
     }
@@ -385,6 +491,7 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
     const newImage = image.getNewValue();
     return {
       name: name.getNewValue() ?? "",
+      disambiguation: disambiguation.getNewValue(),
       aliases: aliases.getNewValue(),
       birthdate: birthdate.getNewValue(),
       ethnicity: ethnicity.getNewValue(),
@@ -411,6 +518,8 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
       death_date: deathDate.getNewValue(),
       hair_color: hairColor.getNewValue(),
       weight: weight.getNewValue(),
+      penis_length: penisLength.getNewValue(),
+      circumcised: circumcised.getNewValue(),
       remote_site_id: remoteSiteID.getNewValue(),
     };
   }
@@ -422,6 +531,11 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
           title={intl.formatMessage({ id: "name" })}
           result={name}
           onChange={(value) => setName(value)}
+        />
+        <ScrapedInputGroupRow
+          title={intl.formatMessage({ id: "disambiguation" })}
+          result={disambiguation}
+          onChange={(value) => setDisambiguation(value)}
         />
         <ScrapedTextAreaRow
           title={intl.formatMessage({ id: "aliases" })}
@@ -448,7 +562,7 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
           result={ethnicity}
           onChange={(value) => setEthnicity(value)}
         />
-        <ScrapedInputGroupRow
+        <ScrapedCountryRow
           title={intl.formatMessage({ id: "country" })}
           result={country}
           onChange={(value) => setCountry(value)}
@@ -473,6 +587,16 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
           result={height}
           onChange={(value) => setHeight(value)}
         />
+        <ScrapedInputGroupRow
+          title={intl.formatMessage({ id: "penis_length" })}
+          result={penisLength}
+          onChange={(value) => setPenisLength(value)}
+        />
+        {renderScrapedCircumcisedRow(
+          intl.formatMessage({ id: "circumcised" }),
+          circumcised,
+          (value) => setCircumcised(value)
+        )}
         <ScrapedInputGroupRow
           title={intl.formatMessage({ id: "measurements" })}
           result={measurements}
@@ -525,10 +649,11 @@ export const PerformerScrapeDialog: React.FC<IPerformerScrapeDialogProps> = (
           newTags,
           createNewTag
         )}
-        <ScrapedImageRow
+        <ScrapedImagesRow
           title={intl.formatMessage({ id: "performer_image" })}
           className="performer-image"
           result={image}
+          images={images}
           onChange={(value) => setImage(value)}
         />
         <ScrapedInputGroupRow

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import { Button, Form } from "react-bootstrap";
-import TruncatedText from "src/components/Shared/TruncatedText";
+import { TruncatedText } from "src/components/Shared/TruncatedText";
 import { VIDEO_PLAYER_ID } from "src/components/ScenePlayer/util";
 import * as GQL from "src/core/generated-graphql";
 
@@ -108,13 +108,26 @@ export const SceneVideoFilterPanel: React.FC<ISceneVideoFilterPanelProps> = (
     aspectRatioRange.default
   );
 
-  function updateVideoStyle() {
-    const playerVideoContainer = document.getElementById(VIDEO_PLAYER_ID);
-    const videoElements =
-      playerVideoContainer?.getElementsByTagName("video") ?? [];
-    const playerVideoElement =
-      videoElements.length > 0 ? videoElements[0] : null;
+  // eslint-disable-next-line
+  function getVideoElement(playerVideoContainer: any) {
+    let videoElements = playerVideoContainer.getElementsByTagName("canvas");
 
+    if (videoElements.length == 0) {
+      videoElements = playerVideoContainer.getElementsByTagName("video");
+    }
+
+    if (videoElements.length > 0) {
+      return videoElements[0];
+    }
+  }
+
+  function updateVideoStyle() {
+    const playerVideoContainer = document.getElementById(VIDEO_PLAYER_ID)!;
+    if (!playerVideoContainer) {
+      return;
+    }
+
+    const playerVideoElement = getVideoElement(playerVideoContainer);
     if (playerVideoElement != null) {
       let styleString = "filter:";
       let style = playerVideoElement.attributes.getNamedItem("style");
@@ -184,6 +197,10 @@ export const SceneVideoFilterPanel: React.FC<ISceneVideoFilterPanelProps> = (
         }
 
         styleString += ` scale(${xScale},${yScale})`;
+      }
+
+      if (playerVideoElement.tagName == "CANVAS") {
+        styleString += "; width: 100%; height: 100%; position: absolute; top:0";
       }
 
       style.value = `${styleString};`;
@@ -505,9 +522,12 @@ export const SceneVideoFilterPanel: React.FC<ISceneVideoFilterPanelProps> = (
       setRotateValue(3);
     }
 
+    const file =
+      props.scene.files.length > 0 ? props.scene.files[0] : undefined;
+
     // Calculate Required Scaling.
-    const sceneWidth = props.scene.file.width ?? 1;
-    const sceneHeight = props.scene.file.height ?? 1;
+    const sceneWidth = file?.width ?? 1;
+    const sceneHeight = file?.height ?? 1;
     const sceneAspectRatio = sceneWidth / sceneHeight;
     const sceneNewAspectRatio = sceneHeight / sceneWidth;
 

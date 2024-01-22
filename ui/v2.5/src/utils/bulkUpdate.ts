@@ -2,7 +2,7 @@ import * as GQL from "src/core/generated-graphql";
 import isEqual from "lodash-es/isEqual";
 
 interface IHasRating {
-  rating?: GQL.Maybe<number> | undefined;
+  rating100?: GQL.Maybe<number> | undefined;
 }
 
 export function getAggregateRating(state: IHasRating[]) {
@@ -11,9 +11,9 @@ export function getAggregateRating(state: IHasRating[]) {
 
   state.forEach((o) => {
     if (first) {
-      ret = o.rating ?? undefined;
+      ret = o.rating100 ?? undefined;
       first = false;
-    } else if (ret !== o.rating) {
+    } else if (ret !== o.rating100) {
       ret = undefined;
     }
   });
@@ -175,9 +175,9 @@ export function getAggregateInputIDs(
   return undefined;
 }
 
-export function getAggregateState<T>(
+export function getAggregateState<T, U>(
   currentValue: T,
-  newValue: T,
+  newValue: U,
   first: boolean
 ) {
   if (!first && !isEqual(currentValue, newValue)) {
@@ -207,8 +207,7 @@ export function getAggregateStateObject<O, I>(
     const inputKey = key as keyof I;
 
     const currentValue = getProperty(output, outputKey);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const performerValue = getProperty(input, inputKey) as any;
+    const performerValue = getProperty(input, inputKey);
 
     setProperty(
       output,

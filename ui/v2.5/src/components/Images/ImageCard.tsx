@@ -1,18 +1,22 @@
-import React, { MouseEvent } from "react";
+import React, { MouseEvent, useMemo } from "react";
 import { Button, ButtonGroup } from "react-bootstrap";
 import cx from "classnames";
 import * as GQL from "src/core/generated-graphql";
-import { Icon, TagLink, HoverPopover, SweatDrops } from "src/components/Shared";
-import { TextUtils } from "src/utils";
-import { PerformerPopoverButton } from "../Shared/PerformerPopoverButton";
-import { GridCard } from "../Shared/GridCard";
-import { RatingBanner } from "../Shared/RatingBanner";
+import { Icon } from "src/components/Shared/Icon";
+import { GalleryLink, TagLink } from "src/components/Shared/TagLink";
+import { HoverPopover } from "src/components/Shared/HoverPopover";
+import { SweatDrops } from "src/components/Shared/SweatDrops";
+import { PerformerPopoverButton } from "src/components/Shared/PerformerPopoverButton";
+import { GridCard } from "src/components/Shared/GridCard";
+import { RatingBanner } from "src/components/Shared/RatingBanner";
 import {
   faBox,
   faImages,
   faSearch,
   faTag,
 } from "@fortawesome/free-solid-svg-icons";
+import { objectTitle } from "src/core/files";
+import { TruncatedText } from "../Shared/TruncatedText";
 
 interface IImageCardProps {
   image: GQL.SlimImageDataFragment;
@@ -26,11 +30,19 @@ interface IImageCardProps {
 export const ImageCard: React.FC<IImageCardProps> = (
   props: IImageCardProps
 ) => {
+  const file = useMemo(
+    () =>
+      props.image.visual_files.length > 0
+        ? props.image.visual_files[0]
+        : undefined,
+    [props.image]
+  );
+
   function maybeRenderTagPopoverButton() {
     if (props.image.tags.length <= 0) return;
 
     const popoverContent = props.image.tags.map((tag) => (
-      <TagLink key={tag.id} tag={tag} tagType="image" />
+      <TagLink key={tag.id} tag={tag} linkType="image" />
     ));
 
     return (
@@ -72,7 +84,7 @@ export const ImageCard: React.FC<IImageCardProps> = (
     if (props.image.galleries.length <= 0) return;
 
     const popoverContent = props.image.galleries.map((gallery) => (
-      <TagLink key={gallery.id} gallery={gallery} />
+      <GalleryLink key={gallery.id} gallery={gallery} />
     ));
 
     return (
@@ -125,29 +137,33 @@ export const ImageCard: React.FC<IImageCardProps> = (
   }
 
   function isPortrait() {
-    const { file } = props.image;
-    const width = file.width ? file.width : 0;
-    const height = file.height ? file.height : 0;
+    const width = file?.width ? file.width : 0;
+    const height = file?.height ? file.height : 0;
     return height > width;
   }
+
+  const source =
+    props.image.paths.preview != ""
+      ? props.image.paths.preview ?? ""
+      : props.image.paths.thumbnail ?? "";
+  const video = source.includes("preview");
+  const ImagePreview = video ? "video" : "img";
 
   return (
     <GridCard
       className={`image-card zoom-${props.zoomIndex}`}
       url={`/images/${props.image.id}`}
-      title={
-        props.image.title
-          ? props.image.title
-          : TextUtils.fileNameFromPath(props.image.path)
-      }
+      title={objectTitle(props.image)}
       linkClassName="image-card-link"
       image={
         <>
           <div className={cx("image-card-preview", { portrait: isPortrait() })}>
-            <img
+            <ImagePreview
+              loop={video}
+              autoPlay={video}
               className="image-card-preview-image"
               alt={props.image.title ?? ""}
-              src={props.image.paths.thumbnail ?? ""}
+              src={source}
             />
             {props.onPreview ? (
               <div className="preview-button">
@@ -157,8 +173,18 @@ export const ImageCard: React.FC<IImageCardProps> = (
               </div>
             ) : undefined}
           </div>
-          <RatingBanner rating={props.image.rating} />
+          <RatingBanner rating={props.image.rating100} />
         </>
+      }
+      details={
+        <div className="image-card__details">
+          <span className="image-card__date">{props.image.date}</span>
+          <TruncatedText
+            className="image-card__description"
+            text={props.image.details}
+            lineCount={3}
+          />
+        </div>
       }
       popovers={maybeRenderPopoverButtonGroup()}
       selected={props.selected}

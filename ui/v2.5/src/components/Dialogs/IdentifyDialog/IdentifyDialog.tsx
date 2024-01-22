@@ -6,11 +6,13 @@ import {
   useConfigureDefaults,
   useListSceneScrapers,
 } from "src/core/StashService";
-import { Icon, Modal, OperationButton } from "src/components/Shared";
-import { useToast } from "src/hooks";
+import { Icon } from "src/components/Shared/Icon";
+import { ModalComponent } from "src/components/Shared/Modal";
+import { OperationButton } from "src/components/Shared/OperationButton";
+import { useToast } from "src/hooks/Toast";
 import * as GQL from "src/core/generated-graphql";
 import { FormattedMessage, useIntl } from "react-intl";
-import { withoutTypename } from "src/utils";
+import { withoutTypename } from "src/utils/data";
 import {
   SCRAPER_PREFIX,
   STASH_BOX_PREFIX,
@@ -48,6 +50,10 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
       includeMalePerformers: true,
       setCoverImage: true,
       setOrganized: false,
+      skipMultipleMatches: true,
+      skipMultipleMatchTag: undefined,
+      skipSingleNamePerformers: true,
+      skipSingleNamePerformerTag: undefined,
     };
   }
 
@@ -88,7 +94,7 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
       })
     );
 
-    const scrapers = scraperData.listSceneScrapers;
+    const scrapers = scraperData.listScrapers;
 
     const fragmentScrapers = scrapers.filter((s) =>
       s.scene?.supported_scrapes.includes(GQL.ScrapeType.Fragment)
@@ -202,9 +208,8 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
 
           if (s.options) {
             const sourceOptions = withoutTypename(s.options);
-            sourceOptions.fieldOptions = sourceOptions.fieldOptions?.map(
-              withoutTypename
-            );
+            sourceOptions.fieldOptions =
+              sourceOptions.fieldOptions?.map(withoutTypename);
             ret.options = sourceOptions;
           }
 
@@ -215,9 +220,8 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
       setSources(mappedSources);
       if (identifyDefaults.options) {
         const defaultOptions = withoutTypename(identifyDefaults.options);
-        defaultOptions.fieldOptions = defaultOptions.fieldOptions?.map(
-          withoutTypename
-        );
+        defaultOptions.fieldOptions =
+          defaultOptions.fieldOptions?.map(withoutTypename);
         setOptions(defaultOptions);
       }
     } else {
@@ -240,6 +244,8 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
         const autoTagCopy = { ...autoTag };
         autoTagCopy.options = {
           setOrganized: false,
+          skipMultipleMatches: true,
+          skipSingleNamePerformers: true,
         };
         newSources.push(autoTagCopy);
       }
@@ -279,12 +285,12 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
     try {
       await mutateMetadataIdentify(makeIdentifyInput());
 
-      Toast.success({
-        content: intl.formatMessage(
+      Toast.success(
+        intl.formatMessage(
           { id: "config.tasks.added_job_to_queue" },
           { operation_name: intl.formatMessage({ id: "actions.identify" }) }
-        ),
-      });
+        )
+      );
     } catch (e) {
       Toast.error(e);
     } finally {
@@ -352,12 +358,12 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
         },
       });
 
-      Toast.success({
-        content: intl.formatMessage(
+      Toast.success(
+        intl.formatMessage(
           { id: "config.tasks.defaults_set" },
           { action: intl.formatMessage({ id: "actions.identify" }) }
-        ),
-      });
+        )
+      );
     } catch (e) {
       Toast.error(e);
     } finally {
@@ -405,7 +411,7 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
   }
 
   return (
-    <Modal
+    <ModalComponent
       modalProps={{ animation, size: "lg" }}
       show
       icon={faCogs}
@@ -453,7 +459,7 @@ export const IdentifyDialog: React.FC<IIdentifyDialogProps> = ({
           setEditingField={(v) => setEditingField(v)}
         />
       </Form>
-    </Modal>
+    </ModalComponent>
   );
 };
 

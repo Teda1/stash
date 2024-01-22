@@ -4,28 +4,36 @@ import { FormattedMessage, useIntl } from "react-intl";
 import Mousetrap from "mousetrap";
 import * as GQL from "src/core/generated-graphql";
 import * as yup from "yup";
-import { useImageUpdate } from "src/core/StashService";
-import {
-  PerformerSelect,
-  TagSelect,
-  StudioSelect,
-  LoadingIndicator,
-} from "src/components/Shared";
-import { useToast } from "src/hooks";
-import { FormUtils } from "src/utils";
+import { TagSelect, StudioSelect } from "src/components/Shared/Select";
+import { LoadingIndicator } from "src/components/Shared/LoadingIndicator";
+import { useToast } from "src/hooks/Toast";
 import { useFormik } from "formik";
 import { Prompt } from "react-router-dom";
-import { RatingStars } from "src/components/Scenes/SceneDetails/RatingStars";
+import { useRatingKeybinds } from "src/hooks/keybinds";
+import { ConfigurationContext } from "src/hooks/Config";
+import isEqual from "lodash-es/isEqual";
+import {
+  yupDateString,
+  yupFormikValidate,
+  yupUniqueStringList,
+} from "src/utils/yup";
+import {
+  Performer,
+  PerformerSelect,
+} from "src/components/Performers/PerformerSelect";
+import { formikUtils } from "src/utils/form";
 
 interface IProps {
   image: GQL.ImageDataFragment;
   isVisible: boolean;
+  onSubmit: (input: GQL.ImageUpdateInput) => Promise<void>;
   onDelete: () => void;
 }
 
 export const ImageEditPanel: React.FC<IProps> = ({
   image,
   isVisible,
+  onSubmit,
   onDelete,
 }) => {
   const intl = useIntl();
@@ -34,130 +42,189 @@ export const ImageEditPanel: React.FC<IProps> = ({
   // Network state
   const [isLoading, setIsLoading] = useState(false);
 
-  const [updateImage] = useImageUpdate();
+  const { configuration } = React.useContext(ConfigurationContext);
+
+  const [performers, setPerformers] = useState<Performer[]>([]);
 
   const schema = yup.object({
-    title: yup.string().optional().nullable(),
-    rating: yup.number().optional().nullable(),
-    studio_id: yup.string().optional().nullable(),
-    performer_ids: yup.array(yup.string().required()).optional().nullable(),
-    tag_ids: yup.array(yup.string().required()).optional().nullable(),
+    title: yup.string().ensure(),
+    code: yup.string().ensure(),
+    urls: yupUniqueStringList(intl),
+    date: yupDateString(intl),
+    details: yup.string().ensure(),
+    photographer: yup.string().ensure(),
+    rating100: yup.number().integer().nullable().defined(),
+    studio_id: yup.string().required().nullable(),
+    performer_ids: yup.array(yup.string().required()).defined(),
+    tag_ids: yup.array(yup.string().required()).defined(),
   });
 
   const initialValues = {
     title: image.title ?? "",
-    rating: image.rating ?? null,
-    studio_id: image.studio?.id,
+    code: image.code ?? "",
+    urls: image?.urls ?? [],
+    date: image?.date ?? "",
+    details: image.details ?? "",
+    photographer: image.photographer ?? "",
+    rating100: image.rating100 ?? null,
+    studio_id: image.studio?.id ?? null,
     performer_ids: (image.performers ?? []).map((p) => p.id),
     tag_ids: (image.tags ?? []).map((t) => t.id),
   };
 
-  type InputValues = typeof initialValues;
+  type InputValues = yup.InferType<typeof schema>;
 
-  const formik = useFormik({
+  const formik = useFormik<InputValues>({
     initialValues,
-    validationSchema: schema,
-    onSubmit: (values) => onSave(getImageInput(values)),
+    enableReinitialize: true,
+    validate: yupFormikValidate(schema),
+    onSubmit: (values) => onSave(schema.cast(values)),
   });
 
   function setRating(v: number) {
-    formik.setFieldValue("rating", v);
+    formik.setFieldValue("rating100", v);
   }
+
+  function onSetPerformers(items: Performer[]) {
+    setPerformers(items);
+    formik.setFieldValue(
+      "performer_ids",
+      items.map((item) => item.id)
+    );
+  }
+
+  useRatingKeybinds(
+    true,
+    configuration?.ui?.ratingSystemOptions?.type,
+    setRating
+  );
+
+  useEffect(() => {
+    setPerformers(image.performers ?? []);
+  }, [image.performers]);
 
   useEffect(() => {
     if (isVisible) {
       Mousetrap.bind("s s", () => {
-        formik.handleSubmit();
+        if (formik.dirty) {
+          formik.submitForm();
+        }
       });
       Mousetrap.bind("d d", () => {
         onDelete();
       });
 
-      // numeric keypresses get caught by jwplayer, so blur the element
-      // if the rating sequence is started
-      Mousetrap.bind("r", () => {
-        if (document.activeElement instanceof HTMLElement) {
-          document.activeElement.blur();
-        }
-
-        Mousetrap.bind("0", () => setRating(NaN));
-        Mousetrap.bind("1", () => setRating(1));
-        Mousetrap.bind("2", () => setRating(2));
-        Mousetrap.bind("3", () => setRating(3));
-        Mousetrap.bind("4", () => setRating(4));
-        Mousetrap.bind("5", () => setRating(5));
-
-        setTimeout(() => {
-          Mousetrap.unbind("0");
-          Mousetrap.unbind("1");
-          Mousetrap.unbind("2");
-          Mousetrap.unbind("3");
-          Mousetrap.unbind("4");
-          Mousetrap.unbind("5");
-        }, 1000);
-      });
-
       return () => {
         Mousetrap.unbind("s s");
         Mousetrap.unbind("d d");
-
-        Mousetrap.unbind("r");
       };
     }
   });
 
-  function getImageInput(input: InputValues): GQL.ImageUpdateInput {
-    return {
-      id: image.id,
-      ...input,
-    };
-  }
-
-  async function onSave(input: GQL.ImageUpdateInput) {
+  async function onSave(input: InputValues) {
     setIsLoading(true);
     try {
-      const result = await updateImage({
-        variables: {
-          input,
-        },
+      await onSubmit({
+        id: image.id,
+        ...input,
       });
-      if (result.data?.imageUpdate) {
-        Toast.success({
-          content: intl.formatMessage(
-            { id: "toast.updated_entity" },
-            { entity: intl.formatMessage({ id: "image" }).toLocaleLowerCase() }
-          ),
-        });
-        formik.resetForm({ values: formik.values });
-      }
+      formik.resetForm();
     } catch (e) {
       Toast.error(e);
     }
     setIsLoading(false);
   }
 
-  function renderTextField(field: string, title: string, placeholder?: string) {
-    return (
-      <Form.Group controlId={title} as={Row}>
-        {FormUtils.renderLabel({
-          title,
-        })}
-        <Col xs={9}>
-          <Form.Control
-            className="text-input"
-            placeholder={placeholder ?? title}
-            {...formik.getFieldProps(field)}
-            isInvalid={!!formik.getFieldMeta(field).error}
-          />
-          <Form.Control.Feedback type="invalid">
-            {formik.getFieldMeta(field).error}
-          </Form.Control.Feedback>
-        </Col>
-      </Form.Group>
+  if (isLoading) return <LoadingIndicator />;
+
+  const splitProps = {
+    labelProps: {
+      column: true,
+      sm: 3,
+    },
+    fieldProps: {
+      sm: 9,
+    },
+  };
+  const fullWidthProps = {
+    labelProps: {
+      column: true,
+      sm: 3,
+      xl: 12,
+    },
+    fieldProps: {
+      sm: 9,
+      xl: 12,
+    },
+  };
+  const {
+    renderField,
+    renderInputField,
+    renderDateField,
+    renderRatingField,
+    renderURLListField,
+  } = formikUtils(intl, formik, splitProps);
+
+  function renderStudioField() {
+    const title = intl.formatMessage({ id: "studio" });
+    const control = (
+      <StudioSelect
+        onSelect={(items) =>
+          formik.setFieldValue(
+            "studio_id",
+            items.length > 0 ? items[0]?.id : null
+          )
+        }
+        ids={formik.values.studio_id ? [formik.values.studio_id] : []}
+      />
     );
+
+    return renderField("studio_id", title, control);
   }
 
-  if (isLoading) return <LoadingIndicator />;
+  function renderPerformersField() {
+    const title = intl.formatMessage({ id: "performers" });
+    const control = (
+      <PerformerSelect isMulti onSelect={onSetPerformers} values={performers} />
+    );
+
+    return renderField("performer_ids", title, control, fullWidthProps);
+  }
+
+  function renderTagsField() {
+    const title = intl.formatMessage({ id: "tags" });
+    const control = (
+      <TagSelect
+        isMulti
+        onSelect={(items) =>
+          formik.setFieldValue(
+            "tag_ids",
+            items.map((item) => item.id)
+          )
+        }
+        ids={formik.values.tag_ids}
+        hoverPlacement="right"
+      />
+    );
+
+    return renderField("tag_ids", title, control, fullWidthProps);
+  }
+
+  function renderDetailsField() {
+    const props = {
+      labelProps: {
+        column: true,
+        sm: 3,
+        lg: 12,
+      },
+      fieldProps: {
+        sm: 9,
+        lg: 12,
+      },
+    };
+
+    return renderInputField("details", "textarea", "details", props);
+  }
 
   return (
     <div id="image-edit-details">
@@ -167,12 +234,12 @@ export const ImageEditPanel: React.FC<IProps> = ({
       />
 
       <Form noValidate onSubmit={formik.handleSubmit}>
-        <div className="form-container row px-3 pt-3">
-          <div className="col edit-buttons mb-3 pl-0">
+        <Row className="form-container edit-buttons-container px-3 pt-3">
+          <div className="edit-buttons mb-3 pl-0">
             <Button
               className="edit-button"
               variant="primary"
-              disabled={!formik.dirty}
+              disabled={!formik.dirty || !isEqual(formik.errors, {})}
               onClick={() => formik.submitForm()}
             >
               <FormattedMessage id="actions.save" />
@@ -185,88 +252,26 @@ export const ImageEditPanel: React.FC<IProps> = ({
               <FormattedMessage id="actions.delete" />
             </Button>
           </div>
-        </div>
-        <div className="form-container row px-3">
-          <div className="col-12 col-lg-6 col-xl-12">
-            {renderTextField("title", intl.formatMessage({ id: "title" }))}
-            <Form.Group controlId="rating" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "rating" }),
-              })}
-              <Col xs={9}>
-                <RatingStars
-                  value={formik.values.rating ?? undefined}
-                  onSetRating={(value) =>
-                    formik.setFieldValue("rating", value ?? null)
-                  }
-                />
-              </Col>
-            </Form.Group>
+        </Row>
+        <Row className="form-container px-3">
+          <Col lg={7} xl={12}>
+            {renderInputField("title")}
+            {renderInputField("code", "text", "scene_code")}
 
-            <Form.Group controlId="studio" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "studio" }),
-              })}
-              <Col xs={9}>
-                <StudioSelect
-                  onSelect={(items) =>
-                    formik.setFieldValue(
-                      "studio_id",
-                      items.length > 0 ? items[0]?.id : null
-                    )
-                  }
-                  ids={formik.values.studio_id ? [formik.values.studio_id] : []}
-                />
-              </Col>
-            </Form.Group>
+            {renderURLListField("urls")}
 
-            <Form.Group controlId="performers" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "performers" }),
-                labelProps: {
-                  column: true,
-                  sm: 3,
-                  xl: 12,
-                },
-              })}
-              <Col sm={9} xl={12}>
-                <PerformerSelect
-                  isMulti
-                  onSelect={(items) =>
-                    formik.setFieldValue(
-                      "performer_ids",
-                      items.map((item) => item.id)
-                    )
-                  }
-                  ids={formik.values.performer_ids}
-                />
-              </Col>
-            </Form.Group>
+            {renderDateField("date")}
+            {renderInputField("photographer")}
+            {renderRatingField("rating100", "rating")}
 
-            <Form.Group controlId="tags" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "tags" }),
-                labelProps: {
-                  column: true,
-                  sm: 3,
-                  xl: 12,
-                },
-              })}
-              <Col sm={9} xl={12}>
-                <TagSelect
-                  isMulti
-                  onSelect={(items) =>
-                    formik.setFieldValue(
-                      "tag_ids",
-                      items.map((item) => item.id)
-                    )
-                  }
-                  ids={formik.values.tag_ids}
-                />
-              </Col>
-            </Form.Group>
-          </div>
-        </div>
+            {renderStudioField()}
+            {renderPerformersField()}
+            {renderTagsField()}
+          </Col>
+          <Col lg={5} xl={12}>
+            {renderDetailsField()}
+          </Col>
+        </Row>
       </Form>
     </div>
   );

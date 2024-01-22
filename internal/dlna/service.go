@@ -1,6 +1,7 @@
 package dlna
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,7 +11,49 @@ import (
 
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/txn"
 )
+
+type Repository struct {
+	TxnManager models.TxnManager
+
+	SceneFinder     SceneFinder
+	FileGetter      models.FileGetter
+	StudioFinder    StudioFinder
+	TagFinder       TagFinder
+	PerformerFinder PerformerFinder
+	MovieFinder     MovieFinder
+}
+
+func NewRepository(repo models.Repository) Repository {
+	return Repository{
+		TxnManager:      repo.TxnManager,
+		FileGetter:      repo.File,
+		SceneFinder:     repo.Scene,
+		StudioFinder:    repo.Studio,
+		TagFinder:       repo.Tag,
+		PerformerFinder: repo.Performer,
+		MovieFinder:     repo.Movie,
+	}
+}
+
+func (r *Repository) WithReadTxn(ctx context.Context, fn txn.TxnFunc) error {
+	return txn.WithReadTxn(ctx, r.TxnManager, fn)
+}
+
+type Status struct {
+	Running bool `json:"running"`
+	// If not currently running, time until it will be started. If running, time until it will be stopped
+	Until              *time.Time `json:"until"`
+	RecentIPAddresses  []string   `json:"recentIPAddresses"`
+	AllowedIPAddresses []*Dlnaip  `json:"allowedIPAddresses"`
+}
+
+type Dlnaip struct {
+	IPAddress string `json:"ipAddress"`
+	// Time until IP will be no longer allowed/disallowed
+	Until *time.Time `json:"until"`
+}
 
 type dmsConfig struct {
 	Path                string
@@ -20,6 +63,7 @@ type dmsConfig struct {
 	LogHeaders          bool
 	StallEventSubscribe bool
 	NotifyInterval      time.Duration
+	VideoSortOrder      string
 }
 
 type sceneServer interface {
@@ -31,10 +75,11 @@ type Config interface {
 	GetDLNAInterfaces() []string
 	GetDLNAServerName() string
 	GetDLNADefaultIPWhitelist() []string
+	GetVideoSortOrder() string
 }
 
 type Service struct {
-	txnManager     models.TransactionManager
+	repository     Repository
 	config         Config
 	sceneServer    sceneServer
 	ipWhitelistMgr *ipWhitelistManager
@@ -97,6 +142,7 @@ func (s *Service) init() error {
 		FriendlyName:   friendlyName,
 		LogHeaders:     false,
 		NotifyInterval: 30 * time.Second,
+		VideoSortOrder: s.config.GetVideoSortOrder(),
 	}
 
 	interfaces, err := s.getInterfaces()
@@ -105,7 +151,7 @@ func (s *Service) init() error {
 	}
 
 	s.server = &Server{
-		txnManager:         s.txnManager,
+		repository:         s.repository,
 		sceneServer:        s.sceneServer,
 		ipWhitelistManager: s.ipWhitelistMgr,
 		Interfaces:         interfaces,
@@ -137,6 +183,7 @@ func (s *Service) init() error {
 		// },
 		StallEventSubscribe: dmsConfig.StallEventSubscribe,
 		NotifyInterval:      dmsConfig.NotifyInterval,
+		VideoSortOrder:      dmsConfig.VideoSortOrder,
 	}
 
 	return nil
@@ -167,9 +214,9 @@ func (s *Service) init() error {
 // }
 
 // NewService initialises and returns a new DLNA service.
-func NewService(txnManager models.TransactionManager, cfg Config, sceneServer sceneServer) *Service {
+func NewService(repo Repository, cfg Config, sceneServer sceneServer) *Service {
 	ret := &Service{
-		txnManager:  txnManager,
+		repository:  repo,
 		sceneServer: sceneServer,
 		config:      cfg,
 		ipWhitelistMgr: &ipWhitelistManager{
@@ -273,11 +320,11 @@ func (s *Service) IsRunning() bool {
 	return s.running
 }
 
-func (s *Service) Status() *models.DLNAStatus {
+func (s *Service) Status() *Status {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	ret := &models.DLNAStatus{
+	ret := &Status{
 		Running:            s.running,
 		RecentIPAddresses:  s.ipWhitelistMgr.getRecent(),
 		AllowedIPAddresses: s.ipWhitelistMgr.getTempAllowed(),

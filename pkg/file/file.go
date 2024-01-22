@@ -1,31 +1,36 @@
 package file
 
 import (
-	"io"
-	"io/fs"
-	"os"
+	"context"
+
+	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/txn"
 )
 
-type fsFile struct {
-	path string
-	info fs.FileInfo
+// Repository provides access to storage methods for files and folders.
+type Repository struct {
+	TxnManager models.TxnManager
+
+	File   models.FileReaderWriter
+	Folder models.FolderReaderWriter
 }
 
-func (f *fsFile) Open() (io.ReadCloser, error) {
-	return os.Open(f.path)
-}
-
-func (f *fsFile) Path() string {
-	return f.path
-}
-
-func (f *fsFile) FileInfo() fs.FileInfo {
-	return f.info
-}
-
-func FSFile(path string, info fs.FileInfo) SourceFile {
-	return &fsFile{
-		path: path,
-		info: info,
+func NewRepository(repo models.Repository) Repository {
+	return Repository{
+		TxnManager: repo.TxnManager,
+		File:       repo.File,
+		Folder:     repo.Folder,
 	}
+}
+
+func (r *Repository) WithTxn(ctx context.Context, fn txn.TxnFunc) error {
+	return txn.WithTxn(ctx, r.TxnManager, fn)
+}
+
+func (r *Repository) WithReadTxn(ctx context.Context, fn txn.TxnFunc) error {
+	return txn.WithReadTxn(ctx, r.TxnManager, fn)
+}
+
+func (r *Repository) WithDB(ctx context.Context, fn txn.TxnFunc) error {
+	return txn.WithDatabase(ctx, r.TxnManager, fn)
 }

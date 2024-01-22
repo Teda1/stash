@@ -1,17 +1,16 @@
 fragment MovieData on Movie {
   id
-  checksum
   name
   aliases
   duration
   date
-  rating
+  rating100
   director
 
   studio {
     ...SlimStudioData
   }
-  
+
   synopsis
   url
   front_image_path
@@ -21,6 +20,5 @@ fragment MovieData on Movie {
   scenes {
     id
     title
-    path
   }
 }

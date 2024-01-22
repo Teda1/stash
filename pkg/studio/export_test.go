@@ -14,39 +14,39 @@ import (
 )
 
 const (
-	studioID              = 1
 	noImageID             = 2
 	errImageID            = 3
 	missingParentStudioID = 4
 	errStudioID           = 5
-	errAliasID            = 6
 
 	parentStudioID    = 10
 	missingStudioID   = 11
 	errParentStudioID = 12
 )
 
-const (
+var (
 	studioName       = "testStudio"
 	url              = "url"
 	details          = "details"
-	rating           = 5
 	parentStudioName = "parentStudio"
 	autoTagIgnored   = true
 )
 
+var studioID = 1
+var rating = 5
 var parentStudio models.Studio = models.Studio{
-	Name: models.NullString(parentStudioName),
+	Name: parentStudioName,
 }
 
 var imageBytes = []byte("imageBytes")
 
+var aliases = []string{"alias"}
 var stashID = models.StashID{
 	StashID:  "StashID",
 	Endpoint: "Endpoint",
 }
-var stashIDs = []*models.StashID{
-	&stashID,
+var stashIDs = []models.StashID{
+	stashID,
 }
 
 const image = "aW1hZ2VCeXRlcw=="
@@ -58,22 +58,20 @@ var (
 
 func createFullStudio(id int, parentID int) models.Studio {
 	ret := models.Studio{
-		ID:      id,
-		Name:    models.NullString(studioName),
-		URL:     models.NullString(url),
-		Details: models.NullString(details),
-		CreatedAt: models.SQLiteTimestamp{
-			Timestamp: createTime,
-		},
-		UpdatedAt: models.SQLiteTimestamp{
-			Timestamp: updateTime,
-		},
-		Rating:        models.NullInt64(rating),
+		ID:            id,
+		Name:          studioName,
+		URL:           url,
+		Details:       details,
+		CreatedAt:     createTime,
+		UpdatedAt:     updateTime,
+		Rating:        &rating,
 		IgnoreAutoTag: autoTagIgnored,
+		Aliases:       models.NewRelatedStrings(aliases),
+		StashIDs:      models.NewRelatedStashIDs(stashIDs),
 	}
 
 	if parentID != 0 {
-		ret.ParentID = models.NullInt64(int64(parentID))
+		ret.ParentID = &parentID
 	}
 
 	return ret
@@ -81,13 +79,11 @@ func createFullStudio(id int, parentID int) models.Studio {
 
 func createEmptyStudio(id int) models.Studio {
 	return models.Studio{
-		ID: id,
-		CreatedAt: models.SQLiteTimestamp{
-			Timestamp: createTime,
-		},
-		UpdatedAt: models.SQLiteTimestamp{
-			Timestamp: updateTime,
-		},
+		ID:        id,
+		CreatedAt: createTime,
+		UpdatedAt: updateTime,
+		Aliases:   models.NewRelatedStrings([]string{}),
+		StashIDs:  models.NewRelatedStashIDs([]models.StashID{}),
 	}
 }
 
@@ -102,13 +98,11 @@ func createFullJSONStudio(parentStudio, image string, aliases []string) *jsonsch
 		UpdatedAt: json.JSONTime{
 			Time: updateTime,
 		},
-		ParentStudio: parentStudio,
-		Image:        image,
-		Rating:       rating,
-		Aliases:      aliases,
-		StashIDs: []models.StashID{
-			stashID,
-		},
+		ParentStudio:  parentStudio,
+		Image:         image,
+		Rating:        rating,
+		Aliases:       aliases,
+		StashIDs:      stashIDs,
 		IgnoreAutoTag: autoTagIgnored,
 	}
 }
@@ -121,6 +115,8 @@ func createEmptyJSONStudio() *jsonschema.Studio {
 		UpdatedAt: json.JSONTime{
 			Time: updateTime,
 		},
+		Aliases:  []string{},
+		StashIDs: []models.StashID{},
 	}
 }
 
@@ -146,21 +142,17 @@ func initTestTable() {
 		},
 		{
 			createFullStudio(errImageID, parentStudioID),
-			nil,
-			true,
+			createFullJSONStudio(parentStudioName, "", []string{"alias"}),
+			// failure to get image is not an error
+			false,
 		},
 		{
 			createFullStudio(missingParentStudioID, missingStudioID),
-			createFullJSONStudio("", image, nil),
+			createFullJSONStudio("", image, []string{"alias"}),
 			false,
 		},
 		{
 			createFullStudio(errStudioID, errParentStudioID),
-			nil,
-			true,
-		},
-		{
-			createFullStudio(errAliasID, parentStudioID),
 			nil,
 			true,
 		},
@@ -170,38 +162,25 @@ func initTestTable() {
 func TestToJSON(t *testing.T) {
 	initTestTable()
 
-	mockStudioReader := &mocks.StudioReaderWriter{}
+	db := mocks.NewDatabase()
 
 	imageErr := errors.New("error getting image")
 
-	mockStudioReader.On("GetImage", studioID).Return(imageBytes, nil).Once()
-	mockStudioReader.On("GetImage", noImageID).Return(nil, nil).Once()
-	mockStudioReader.On("GetImage", errImageID).Return(nil, imageErr).Once()
-	mockStudioReader.On("GetImage", missingParentStudioID).Return(imageBytes, nil).Maybe()
-	mockStudioReader.On("GetImage", errStudioID).Return(imageBytes, nil).Maybe()
-	mockStudioReader.On("GetImage", errAliasID).Return(imageBytes, nil).Maybe()
+	db.Studio.On("GetImage", testCtx, studioID).Return(imageBytes, nil).Once()
+	db.Studio.On("GetImage", testCtx, noImageID).Return(nil, nil).Once()
+	db.Studio.On("GetImage", testCtx, errImageID).Return(nil, imageErr).Once()
+	db.Studio.On("GetImage", testCtx, missingParentStudioID).Return(imageBytes, nil).Maybe()
+	db.Studio.On("GetImage", testCtx, errStudioID).Return(imageBytes, nil).Maybe()
 
 	parentStudioErr := errors.New("error getting parent studio")
 
-	mockStudioReader.On("Find", parentStudioID).Return(&parentStudio, nil)
-	mockStudioReader.On("Find", missingStudioID).Return(nil, nil)
-	mockStudioReader.On("Find", errParentStudioID).Return(nil, parentStudioErr)
-
-	aliasErr := errors.New("error getting aliases")
-
-	mockStudioReader.On("GetAliases", studioID).Return([]string{"alias"}, nil).Once()
-	mockStudioReader.On("GetAliases", noImageID).Return(nil, nil).Once()
-	mockStudioReader.On("GetAliases", errImageID).Return(nil, nil).Once()
-	mockStudioReader.On("GetAliases", missingParentStudioID).Return(nil, nil).Once()
-	mockStudioReader.On("GetAliases", errAliasID).Return(nil, aliasErr).Once()
-
-	mockStudioReader.On("GetStashIDs", studioID).Return(stashIDs, nil).Once()
-	mockStudioReader.On("GetStashIDs", noImageID).Return(nil, nil).Once()
-	mockStudioReader.On("GetStashIDs", missingParentStudioID).Return(stashIDs, nil).Once()
+	db.Studio.On("Find", testCtx, parentStudioID).Return(&parentStudio, nil)
+	db.Studio.On("Find", testCtx, missingStudioID).Return(nil, nil)
+	db.Studio.On("Find", testCtx, errParentStudioID).Return(nil, parentStudioErr)
 
 	for i, s := range scenarios {
 		studio := s.input
-		json, err := ToJSON(mockStudioReader, &studio)
+		json, err := ToJSON(testCtx, db.Studio, &studio)
 
 		switch {
 		case !s.err && err != nil:
@@ -213,5 +192,5 @@ func TestToJSON(t *testing.T) {
 		}
 	}
 
-	mockStudioReader.AssertExpectations(t)
+	db.AssertExpectations(t)
 }

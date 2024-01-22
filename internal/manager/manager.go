@@ -4,358 +4,177 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"net/http"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
-	"strings"
-	"sync"
+	"runtime"
 	"time"
 
-	"github.com/stashapp/stash/internal/desktop"
 	"github.com/stashapp/stash/internal/dlna"
 	"github.com/stashapp/stash/internal/log"
 	"github.com/stashapp/stash/internal/manager/config"
-	"github.com/stashapp/stash/pkg/database"
 	"github.com/stashapp/stash/pkg/ffmpeg"
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/job"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/models/paths"
+	"github.com/stashapp/stash/pkg/pkg"
 	"github.com/stashapp/stash/pkg/plugin"
 	"github.com/stashapp/stash/pkg/scraper"
 	"github.com/stashapp/stash/pkg/session"
 	"github.com/stashapp/stash/pkg/sqlite"
-	"github.com/stashapp/stash/pkg/utils"
-	"github.com/stashapp/stash/ui"
+
+	// register custom migrations
+	_ "github.com/stashapp/stash/pkg/sqlite/migrations"
 )
 
 type Manager struct {
-	Config *config.Instance
+	Config *config.Config
 	Logger *log.Logger
 
 	Paths *paths.Paths
 
-	FFMPEG  ffmpeg.FFMpeg
-	FFProbe ffmpeg.FFProbe
+	FFMpeg        *ffmpeg.FFMpeg
+	FFProbe       ffmpeg.FFProbe
+	StreamManager *ffmpeg.StreamManager
 
+	JobManager      *job.Manager
 	ReadLockManager *fsutil.ReadLockManager
 
-	SessionStore *session.Store
-
-	JobManager *job.Manager
+	DownloadStore *DownloadStore
+	SessionStore  *session.Store
 
 	PluginCache  *plugin.Cache
 	ScraperCache *scraper.Cache
 
-	DownloadStore *DownloadStore
+	PluginPackageManager  *pkg.Manager
+	ScraperPackageManager *pkg.Manager
 
 	DLNAService *dlna.Service
 
-	TxnManager models.TransactionManager
+	Database   *sqlite.Database
+	Repository models.Repository
+
+	SceneService   SceneService
+	ImageService   ImageService
+	GalleryService GalleryService
 
 	scanSubs *subscriptionManager
 }
 
 var instance *Manager
-var once sync.Once
 
 func GetInstance() *Manager {
-	if _, err := Initialize(); err != nil {
-		panic(err)
+	if instance == nil {
+		panic("manager not initialized")
 	}
 	return instance
 }
 
-func Initialize() (*Manager, error) {
-	var err error
-	once.Do(func() {
-		err = initialize()
+func (s *Manager) SetBlobStoreOptions() {
+	storageType := s.Config.GetBlobsStorage()
+	blobsPath := s.Config.GetBlobsPath()
+
+	s.Database.SetBlobStoreOptions(sqlite.BlobStoreOptions{
+		UseFilesystem: storageType == config.BlobStorageTypeFilesystem,
+		UseDatabase:   storageType == config.BlobStorageTypeDatabase,
+		Path:          blobsPath,
 	})
-
-	return instance, err
-}
-
-func initialize() error {
-	ctx := context.TODO()
-	cfg, err := config.Initialize()
-
-	if err != nil {
-		return fmt.Errorf("initializing configuration: %w", err)
-	}
-
-	l := initLog()
-	initProfiling(cfg.GetCPUProfilePath())
-
-	instance = &Manager{
-		Config:          cfg,
-		Logger:          l,
-		ReadLockManager: fsutil.NewReadLockManager(),
-		DownloadStore:   NewDownloadStore(),
-		PluginCache:     plugin.NewCache(cfg),
-
-		TxnManager: sqlite.NewTransactionManager(),
-
-		scanSubs: &subscriptionManager{},
-	}
-
-	instance.JobManager = initJobManager()
-
-	sceneServer := SceneServer{
-		TXNManager: instance.TxnManager,
-	}
-	instance.DLNAService = dlna.NewService(instance.TxnManager, instance.Config, &sceneServer)
-
-	if !cfg.IsNewSystem() {
-		logger.Infof("using config file: %s", cfg.GetConfigFile())
-
-		if err == nil {
-			err = cfg.Validate()
-		}
-
-		if err != nil {
-			return fmt.Errorf("error initializing configuration: %w", err)
-		} else if err := instance.PostInit(ctx); err != nil {
-			return err
-		}
-
-		initSecurity(cfg)
-	} else {
-		cfgFile := cfg.GetConfigFile()
-		if cfgFile != "" {
-			cfgFile += " "
-		}
-
-		// create temporary session store - this will be re-initialised
-		// after config is complete
-		instance.SessionStore = session.NewStore(cfg)
-
-		logger.Warnf("config file %snot found. Assuming new system...", cfgFile)
-	}
-
-	if err = initFFMPEG(ctx); err != nil {
-		logger.Warnf("could not initialize FFMPEG subsystem: %v", err)
-	}
-
-	// if DLNA is enabled, start it now
-	if instance.Config.GetDLNADefaultEnabled() {
-		if err := instance.DLNAService.Start(nil); err != nil {
-			logger.Warnf("could not start DLNA service: %v", err)
-		}
-	}
-
-	return nil
-}
-
-func initJobManager() *job.Manager {
-	ret := job.NewManager()
-
-	// desktop notifications
-	ctx := context.Background()
-	c := ret.Subscribe(context.Background())
-	go func() {
-		for {
-			select {
-			case j := <-c.RemovedJob:
-				if instance.Config.GetNotificationsEnabled() {
-					cleanDesc := strings.TrimRight(j.Description, ".")
-
-					if j.StartTime == nil {
-						// Task was never started
-						return
-					}
-
-					timeElapsed := j.EndTime.Sub(*j.StartTime)
-					desktop.SendNotification("Task Finished", "Task \""+cleanDesc+"\" is finished in "+formatDuration(timeElapsed)+".")
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return ret
-}
-
-func formatDuration(t time.Duration) string {
-	return fmt.Sprintf("%02.f:%02.f:%02.f", t.Hours(), t.Minutes(), t.Seconds())
-}
-
-func initSecurity(cfg *config.Instance) {
-	if err := session.CheckExternalAccessTripwire(cfg); err != nil {
-		session.LogExternalAccessError(*err)
-	}
-}
-
-func initProfiling(cpuProfilePath string) {
-	if cpuProfilePath == "" {
-		return
-	}
-
-	f, err := os.Create(cpuProfilePath)
-	if err != nil {
-		logger.Fatalf("unable to create cpu profile file: %s", err.Error())
-	}
-
-	logger.Infof("profiling to %s", cpuProfilePath)
-
-	// StopCPUProfile is defer called in main
-	if err = pprof.StartCPUProfile(f); err != nil {
-		logger.Warnf("could not start CPU profiling: %v", err)
-	}
-}
-
-func initFFMPEG(ctx context.Context) error {
-	// only do this if we have a config file set
-	if instance.Config.GetConfigFile() != "" {
-		// use same directory as config path
-		configDirectory := instance.Config.GetConfigPath()
-		paths := []string{
-			configDirectory,
-			paths.GetStashHomeDirectory(),
-		}
-		ffmpegPath, ffprobePath := ffmpeg.GetPaths(paths)
-
-		if ffmpegPath == "" || ffprobePath == "" {
-			logger.Infof("couldn't find FFMPEG, attempting to download it")
-			if err := ffmpeg.Download(ctx, configDirectory); err != nil {
-				msg := `Unable to locate / automatically download FFMPEG
-
-	Check the readme for download links.
-	The FFMPEG and FFProbe binaries should be placed in %s
-
-	The error was: %s
-	`
-				logger.Errorf(msg, configDirectory, err)
-				return err
-			} else {
-				// After download get new paths for ffmpeg and ffprobe
-				ffmpegPath, ffprobePath = ffmpeg.GetPaths(paths)
-			}
-		}
-
-		instance.FFMPEG = ffmpeg.FFMpeg(ffmpegPath)
-		instance.FFProbe = ffmpeg.FFProbe(ffprobePath)
-	}
-
-	return nil
-}
-
-func initLog() *log.Logger {
-	config := config.GetInstance()
-	l := log.NewLogger()
-	l.Init(config.GetLogFile(), config.GetLogOut(), config.GetLogLevel())
-	logger.Logger = l
-
-	return l
-}
-
-// PostInit initialises the paths, caches and txnManager after the initial
-// configuration has been set. Should only be called if the configuration
-// is valid.
-func (s *Manager) PostInit(ctx context.Context) error {
-	if err := s.Config.SetInitialConfig(); err != nil {
-		logger.Warnf("could not set initial configuration: %v", err)
-	}
-
-	s.Paths = paths.NewPaths(s.Config.GetGeneratedPath())
-	s.RefreshConfig()
-	s.SessionStore = session.NewStore(s.Config)
-	s.PluginCache.RegisterSessionStore(s.SessionStore)
-
-	if err := s.PluginCache.LoadPlugins(); err != nil {
-		logger.Errorf("Error reading plugin configs: %s", err.Error())
-	}
-
-	s.ScraperCache = instance.initScraperCache()
-	writeStashIcon()
-
-	// clear the downloads and tmp directories
-	// #1021 - only clear these directories if the generated folder is non-empty
-	if s.Config.GetGeneratedPath() != "" {
-		const deleteTimeout = 1 * time.Second
-
-		utils.Timeout(func() {
-			if err := fsutil.EmptyDir(instance.Paths.Generated.Downloads); err != nil {
-				logger.Warnf("could not empty Downloads directory: %v", err)
-			}
-			if err := fsutil.EmptyDir(instance.Paths.Generated.Tmp); err != nil {
-				logger.Warnf("could not empty Tmp directory: %v", err)
-			}
-		}, deleteTimeout, func(done chan struct{}) {
-			logger.Info("Please wait. Deleting temporary files...") // print
-			<-done                                                  // and wait for deletion
-			logger.Info("Temporary files deleted.")
-		})
-	}
-
-	if err := database.Initialize(s.Config.GetDatabasePath()); err != nil {
-		return err
-	}
-
-	if database.Ready() == nil {
-		s.PostMigrate(ctx)
-	}
-
-	return nil
-}
-
-func writeStashIcon() {
-	p := FaviconProvider{
-		UIBox: ui.UIBox,
-	}
-
-	iconPath := filepath.Join(instance.Config.GetConfigPath(), "icon.png")
-	err := ioutil.WriteFile(iconPath, p.GetFaviconPng(), 0644)
-	if err != nil {
-		logger.Errorf("Couldn't write icon file: %s", err.Error())
-	}
-}
-
-// initScraperCache initializes a new scraper cache and returns it.
-func (s *Manager) initScraperCache() *scraper.Cache {
-	ret, err := scraper.NewCache(config.GetInstance(), s.TxnManager)
-
-	if err != nil {
-		logger.Errorf("Error reading scraper configs: %s", err.Error())
-	}
-
-	return ret
 }
 
 func (s *Manager) RefreshConfig() {
-	s.Paths = paths.NewPaths(s.Config.GetGeneratedPath())
-	config := s.Config
-	if config.Validate() == nil {
+	cfg := s.Config
+	*s.Paths = paths.NewPaths(cfg.GetGeneratedPath(), cfg.GetBlobsPath())
+	if cfg.Validate() == nil {
 		if err := fsutil.EnsureDir(s.Paths.Generated.Screenshots); err != nil {
-			logger.Warnf("could not create directory for Screenshots: %v", err)
+			logger.Warnf("could not create screenshots directory: %v", err)
 		}
 		if err := fsutil.EnsureDir(s.Paths.Generated.Vtt); err != nil {
-			logger.Warnf("could not create directory for VTT: %v", err)
+			logger.Warnf("could not create VTT directory: %v", err)
 		}
 		if err := fsutil.EnsureDir(s.Paths.Generated.Markers); err != nil {
-			logger.Warnf("could not create directory for Markers: %v", err)
+			logger.Warnf("could not create markers directory: %v", err)
 		}
 		if err := fsutil.EnsureDir(s.Paths.Generated.Transcodes); err != nil {
-			logger.Warnf("could not create directory for Transcodes: %v", err)
+			logger.Warnf("could not create transcodes directory: %v", err)
 		}
 		if err := fsutil.EnsureDir(s.Paths.Generated.Downloads); err != nil {
-			logger.Warnf("could not create directory for Downloads: %v", err)
+			logger.Warnf("could not create downloads directory: %v", err)
 		}
 		if err := fsutil.EnsureDir(s.Paths.Generated.InteractiveHeatmap); err != nil {
-			logger.Warnf("could not create directory for Interactive Heatmaps: %v", err)
+			logger.Warnf("could not create interactive heatmaps directory: %v", err)
 		}
 	}
 }
 
-// RefreshScraperCache refreshes the scraper cache. Call this when scraper
-// configuration changes.
-func (s *Manager) RefreshScraperCache() {
-	s.ScraperCache = s.initScraperCache()
+// RefreshPluginCache refreshes the plugin cache.
+// Call this when the plugin configuration changes.
+func (s *Manager) RefreshPluginCache() {
+	s.PluginCache.ReloadPlugins()
 }
 
-func setSetupDefaults(input *models.SetupInput) {
+// RefreshScraperCache refreshes the scraper cache.
+// Call this when the scraper configuration changes.
+func (s *Manager) RefreshScraperCache() {
+	s.ScraperCache.ReloadScrapers()
+}
+
+// RefreshStreamManager refreshes the stream manager.
+// Call this when the cache directory changes.
+func (s *Manager) RefreshStreamManager() {
+	// shutdown existing manager if needed
+	if s.StreamManager != nil {
+		s.StreamManager.Shutdown()
+		s.StreamManager = nil
+	}
+
+	cfg := s.Config
+	cacheDir := cfg.GetCachePath()
+	s.StreamManager = ffmpeg.NewStreamManager(cacheDir, s.FFMpeg, s.FFProbe, cfg, s.ReadLockManager)
+}
+
+// RefreshDLNA starts/stops the DLNA service as needed.
+func (s *Manager) RefreshDLNA() {
+	dlnaService := s.DLNAService
+	enabled := s.Config.GetDLNADefaultEnabled()
+	if !enabled && dlnaService.IsRunning() {
+		dlnaService.Stop(nil)
+	} else if enabled && !dlnaService.IsRunning() {
+		if err := dlnaService.Start(nil); err != nil {
+			logger.Warnf("error starting DLNA service: %v", err)
+		}
+	}
+}
+
+func createPackageManager(localPath string, srcPathGetter pkg.SourcePathGetter) *pkg.Manager {
+	const timeout = 10 * time.Second
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		},
+		Timeout: timeout,
+	}
+
+	return &pkg.Manager{
+		Local: &pkg.Store{
+			BaseDir:      localPath,
+			ManifestFile: pkg.ManifestFile,
+		},
+		PackagePathGetter: srcPathGetter,
+		Client:            httpClient,
+	}
+}
+
+func (s *Manager) RefreshScraperSourceManager() {
+	s.ScraperPackageManager = createPackageManager(s.Config.GetScrapersPath(), s.Config.GetScraperPackagePathGetter())
+}
+
+func (s *Manager) RefreshPluginSourceManager() {
+	s.PluginPackageManager = createPackageManager(s.Config.GetPluginsPath(), s.Config.GetPluginPackagePathGetter())
+}
+
+func setSetupDefaults(input *SetupInput) {
 	if input.ConfigLocation == "" {
 		input.ConfigLocation = filepath.Join(fsutil.GetHomeDirectory(), ".stash", "config.yml")
 	}
@@ -364,37 +183,55 @@ func setSetupDefaults(input *models.SetupInput) {
 	if input.GeneratedLocation == "" {
 		input.GeneratedLocation = filepath.Join(configDir, "generated")
 	}
+	if input.CacheLocation == "" {
+		input.CacheLocation = filepath.Join(configDir, "cache")
+	}
 
 	if input.DatabaseFile == "" {
 		input.DatabaseFile = filepath.Join(configDir, "stash-go.sqlite")
 	}
+
+	if input.BlobsLocation == "" {
+		input.BlobsLocation = filepath.Join(configDir, "blobs")
+	}
 }
 
-func (s *Manager) Setup(ctx context.Context, input models.SetupInput) error {
+func (s *Manager) Setup(ctx context.Context, input SetupInput) error {
 	setSetupDefaults(&input)
-	c := s.Config
+	cfg := s.Config
 
 	// create the config directory if it does not exist
 	// don't do anything if config is already set in the environment
 	if !config.FileEnvSet() {
-		configDir := filepath.Dir(input.ConfigLocation)
+		// #3304 - if config path is relative, it breaks the ffmpeg/ffprobe
+		// paths since they must not be relative. The config file property is
+		// resolved to an absolute path when stash is run normally, so convert
+		// relative paths to absolute paths during setup.
+		configFile, _ := filepath.Abs(input.ConfigLocation)
+
+		configDir := filepath.Dir(configFile)
+
 		if exists, _ := fsutil.DirExists(configDir); !exists {
-			if err := os.Mkdir(configDir, 0755); err != nil {
+			if err := os.MkdirAll(configDir, 0755); err != nil {
 				return fmt.Errorf("error creating config directory: %v", err)
 			}
 		}
 
-		if err := fsutil.Touch(input.ConfigLocation); err != nil {
+		if err := fsutil.Touch(configFile); err != nil {
 			return fmt.Errorf("error creating config file: %v", err)
 		}
 
-		s.Config.SetConfigFile(input.ConfigLocation)
+		s.Config.SetConfigFile(configFile)
+	}
+
+	if err := cfg.SetInitialConfig(); err != nil {
+		return fmt.Errorf("error setting initial configuration: %v", err)
 	}
 
 	// create the generated directory if it does not exist
-	if !c.HasOverride(config.Generated) {
+	if !cfg.HasOverride(config.Generated) {
 		if exists, _ := fsutil.DirExists(input.GeneratedLocation); !exists {
-			if err := os.Mkdir(input.GeneratedLocation, 0755); err != nil {
+			if err := os.MkdirAll(input.GeneratedLocation, 0755); err != nil {
 				return fmt.Errorf("error creating generated directory: %v", err)
 			}
 		}
@@ -402,48 +239,80 @@ func (s *Manager) Setup(ctx context.Context, input models.SetupInput) error {
 		s.Config.Set(config.Generated, input.GeneratedLocation)
 	}
 
-	// set the configuration
-	if !c.HasOverride(config.Database) {
-		s.Config.Set(config.Database, input.DatabaseFile)
+	// create the cache directory if it does not exist
+	if !cfg.HasOverride(config.Cache) {
+		if exists, _ := fsutil.DirExists(input.CacheLocation); !exists {
+			if err := os.MkdirAll(input.CacheLocation, 0755); err != nil {
+				return fmt.Errorf("error creating cache directory: %v", err)
+			}
+		}
+
+		cfg.Set(config.Cache, input.CacheLocation)
 	}
 
-	s.Config.Set(config.Stash, input.Stashes)
-	if err := s.Config.Write(); err != nil {
+	if input.StoreBlobsInDatabase {
+		cfg.Set(config.BlobsStorage, config.BlobStorageTypeDatabase)
+	} else {
+		if !cfg.HasOverride(config.BlobsPath) {
+			if exists, _ := fsutil.DirExists(input.BlobsLocation); !exists {
+				if err := os.MkdirAll(input.BlobsLocation, 0755); err != nil {
+					return fmt.Errorf("error creating blobs directory: %v", err)
+				}
+			}
+
+			cfg.Set(config.BlobsPath, input.BlobsLocation)
+		}
+
+		cfg.Set(config.BlobsStorage, config.BlobStorageTypeFilesystem)
+	}
+
+	// set the configuration
+	if !cfg.HasOverride(config.Database) {
+		cfg.Set(config.Database, input.DatabaseFile)
+	}
+
+	cfg.Set(config.Stash, input.Stashes)
+
+	if err := cfg.Write(); err != nil {
 		return fmt.Errorf("error writing configuration file: %v", err)
 	}
 
-	// initialise the database
-	if err := s.PostInit(ctx); err != nil {
-		return fmt.Errorf("error initializing the database: %v", err)
+	// finish initialization
+	if err := s.postInit(ctx); err != nil {
+		return fmt.Errorf("error completing initialization: %v", err)
 	}
 
-	s.Config.FinalizeSetup()
-
-	if err := initFFMPEG(ctx); err != nil {
-		return fmt.Errorf("error initializing FFMPEG subsystem: %v", err)
-	}
+	cfg.FinalizeSetup()
 
 	return nil
 }
 
-func (s *Manager) validateFFMPEG() error {
-	if s.FFMPEG == "" || s.FFProbe == "" {
+func (s *Manager) validateFFmpeg() error {
+	if s.FFMpeg == nil || s.FFProbe == "" {
 		return errors.New("missing ffmpeg and/or ffprobe")
 	}
-
 	return nil
 }
 
-func (s *Manager) Migrate(ctx context.Context, input models.MigrateInput) error {
+func (s *Manager) Migrate(ctx context.Context, input MigrateInput) error {
+	database := s.Database
+
 	// always backup so that we can roll back to the previous version if
 	// migration fails
 	backupPath := input.BackupPath
 	if backupPath == "" {
-		backupPath = database.DatabaseBackupPath()
+		backupPath = database.DatabaseBackupPath(s.Config.GetBackupDirectoryPath())
+	} else {
+		// check if backup path is a filename or path
+		// filename goes into backup directory, path is kept as is
+		filename := filepath.Base(backupPath)
+		if backupPath == filename {
+			backupPath = filepath.Join(s.Config.GetBackupDirectoryPathOrDefault(), filename)
+		}
 	}
 
 	// perform database backup
-	if err := database.Backup(database.DB, backupPath); err != nil {
+	if err := database.Backup(backupPath); err != nil {
 		return fmt.Errorf("error backing up database: %s", err)
 	}
 
@@ -461,9 +330,6 @@ func (s *Manager) Migrate(ctx context.Context, input models.MigrateInput) error 
 		return errors.New(errStr)
 	}
 
-	// perform post-migration operations
-	s.PostMigrate(ctx)
-
 	// if no backup path was provided, then delete the created backup
 	if input.BackupPath == "" {
 		if err := os.Remove(backupPath); err != nil {
@@ -474,20 +340,98 @@ func (s *Manager) Migrate(ctx context.Context, input models.MigrateInput) error 
 	return nil
 }
 
-func (s *Manager) GetSystemStatus() *models.SystemStatus {
-	status := models.SystemStatusEnumOk
+func (s *Manager) BackupDatabase(download bool) (string, string, error) {
+	var backupPath string
+	var backupName string
+	if download {
+		backupDir := s.Paths.Generated.Downloads
+		if err := fsutil.EnsureDir(backupDir); err != nil {
+			return "", "", fmt.Errorf("could not create backup directory %v: %w", backupDir, err)
+		}
+		f, err := os.CreateTemp(backupDir, "backup*.sqlite")
+		if err != nil {
+			return "", "", err
+		}
+
+		backupPath = f.Name()
+		backupName = s.Database.DatabaseBackupPath("")
+		f.Close()
+	} else {
+		backupDir := s.Config.GetBackupDirectoryPathOrDefault()
+		if backupDir != "" {
+			if err := fsutil.EnsureDir(backupDir); err != nil {
+				return "", "", fmt.Errorf("could not create backup directory %v: %w", backupDir, err)
+			}
+		}
+		backupPath = s.Database.DatabaseBackupPath(backupDir)
+		backupName = filepath.Base(backupPath)
+	}
+
+	err := s.Database.Backup(backupPath)
+	if err != nil {
+		return "", "", err
+	}
+
+	return backupPath, backupName, nil
+}
+
+func (s *Manager) AnonymiseDatabase(download bool) (string, string, error) {
+	var outPath string
+	var outName string
+	if download {
+		outDir := s.Paths.Generated.Downloads
+		if err := fsutil.EnsureDir(outDir); err != nil {
+			return "", "", fmt.Errorf("could not create output directory %v: %w", outDir, err)
+		}
+		f, err := os.CreateTemp(outDir, "anonymous*.sqlite")
+		if err != nil {
+			return "", "", err
+		}
+
+		outPath = f.Name()
+		outName = s.Database.AnonymousDatabasePath("")
+		f.Close()
+	} else {
+		outDir := s.Config.GetBackupDirectoryPathOrDefault()
+		if outDir != "" {
+			if err := fsutil.EnsureDir(outDir); err != nil {
+				return "", "", fmt.Errorf("could not create output directory %v: %w", outDir, err)
+			}
+		}
+		outPath = s.Database.AnonymousDatabasePath(outDir)
+		outName = filepath.Base(outPath)
+	}
+
+	err := s.Database.Anonymise(outPath)
+	if err != nil {
+		return "", "", err
+	}
+
+	return outPath, outName, nil
+}
+
+func (s *Manager) GetSystemStatus() *SystemStatus {
+	workingDir := fsutil.GetWorkingDirectory()
+	homeDir := fsutil.GetHomeDirectory()
+
+	database := s.Database
 	dbSchema := int(database.Version())
 	dbPath := database.DatabasePath()
 	appSchema := int(database.AppSchemaVersion())
-	configFile := s.Config.GetConfigFile()
 
+	status := SystemStatusEnumOk
 	if s.Config.IsNewSystem() {
-		status = models.SystemStatusEnumSetup
+		status = SystemStatusEnumSetup
 	} else if dbSchema < appSchema {
-		status = models.SystemStatusEnumNeedsMigration
+		status = SystemStatusEnumNeedsMigration
 	}
 
-	return &models.SystemStatus{
+	configFile := s.Config.GetConfigFile()
+
+	return &SystemStatus{
+		Os:             runtime.GOOS,
+		WorkingDir:     workingDir,
+		HomeDir:        homeDir,
 		DatabaseSchema: &dbSchema,
 		DatabasePath:   &dbPath,
 		AppSchema:      appSchema,
@@ -497,19 +441,16 @@ func (s *Manager) GetSystemStatus() *models.SystemStatus {
 }
 
 // Shutdown gracefully stops the manager
-func (s *Manager) Shutdown(code int) {
-	// stop any profiling at exit
-	pprof.StopCPUProfile()
-
+func (s *Manager) Shutdown() {
 	// TODO: Each part of the manager needs to gracefully stop at some point
-	// for now, we just close the database.
-	err := database.Close()
-	if err != nil {
-		logger.Errorf("Error closing database: %s", err)
-		if code == 0 {
-			os.Exit(1)
-		}
+
+	if s.StreamManager != nil {
+		s.StreamManager.Shutdown()
+		s.StreamManager = nil
 	}
 
-	os.Exit(code)
+	err := s.Database.Close()
+	if err != nil {
+		logger.Errorf("Error closing database: %s", err)
+	}
 }

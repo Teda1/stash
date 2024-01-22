@@ -7,16 +7,14 @@ import { blobToBase64 } from "base64-blob";
 import { distance } from "src/utils/hamming";
 
 import * as GQL from "src/core/generated-graphql";
-import {
-  HoverPopover,
-  Icon,
-  LoadingIndicator,
-  SuccessIcon,
-  TagSelect,
-  TruncatedText,
-  OperationButton,
-} from "src/components/Shared";
-import { FormUtils } from "src/utils";
+import { HoverPopover } from "src/components/Shared/HoverPopover";
+import { Icon } from "src/components/Shared/Icon";
+import { LoadingIndicator } from "src/components/Shared/LoadingIndicator";
+import { SuccessIcon } from "src/components/Shared/SuccessIcon";
+import { TagSelect } from "src/components/Shared/Select";
+import { TruncatedText } from "src/components/Shared/TruncatedText";
+import { OperationButton } from "src/components/Shared/OperationButton";
+import * as FormUtils from "src/utils/form";
 import { stringToGender } from "src/utils/gender";
 import { IScrapedScene, TaggerStateContext } from "../context";
 import { OptionalField } from "../IncludeButton";
@@ -25,6 +23,7 @@ import PerformerResult from "./PerformerResult";
 import StudioResult from "./StudioResult";
 import { useInitialState } from "src/hooks/state";
 import { faPlus } from "@fortawesome/free-solid-svg-icons";
+import { getStashboxBase } from "src/utils/stashbox";
 
 const getDurationStatus = (
   scene: IScrapedScene,
@@ -37,9 +36,7 @@ const getDurationStatus = (
       ?.map((f) => f.duration)
       .map((d) => Math.abs(d - stashDuration)) ?? [];
 
-  const sceneDuration = scene.duration ?? 0;
-
-  if (!sceneDuration && durations.length === 0) return "";
+  if (!scene.duration && durations.length === 0) return "";
 
   const matchCount = durations.filter((duration) => duration <= 5).length;
 
@@ -51,7 +48,7 @@ const getDurationStatus = (
         values={{ matchCount, durationsLength: durations.length }}
       />
     );
-  else if (Math.abs(sceneDuration - stashDuration) < 5)
+  else if (scene.duration && Math.abs(scene.duration - stashDuration) < 5)
     match = <FormattedMessage id="component_tagger.results.fp_matches" />;
 
   if (match)
@@ -62,10 +59,11 @@ const getDurationStatus = (
       </div>
     );
 
-  const minDiff = Math.min(
-    Math.abs(sceneDuration - stashDuration),
-    ...durations
-  );
+  let minDiff = Math.min(...durations);
+  if (scene.duration) {
+    minDiff = Math.min(minDiff, Math.abs(scene.duration - stashDuration));
+  }
+
   return (
     <FormattedMessage
       id="component_tagger.results.duration_off"
@@ -74,66 +72,113 @@ const getDurationStatus = (
   );
 };
 
+function matchPhashes(
+  scenePhashes: Pick<GQL.Fingerprint, "type" | "value">[],
+  fingerprints: GQL.StashBoxFingerprint[]
+) {
+  const phashes = fingerprints.filter((f) => f.algorithm === "PHASH");
+
+  const matches: { [key: string]: number } = {};
+  phashes.forEach((p) => {
+    let bestMatch = -1;
+    scenePhashes.forEach((fp) => {
+      const d = distance(p.hash, fp.value);
+
+      if (d <= 8 && (bestMatch === -1 || d < bestMatch)) {
+        bestMatch = d;
+      }
+    });
+
+    if (bestMatch !== -1) {
+      matches[p.hash] = bestMatch;
+    }
+  });
+
+  // convert to tuple and sort by distance descending
+  const entries = Object.entries(matches);
+  entries.sort((a, b) => {
+    return a[1] - b[1];
+  });
+
+  return entries;
+}
+
 const getFingerprintStatus = (
   scene: IScrapedScene,
   stashScene: GQL.SlimSceneDataFragment
 ) => {
-  const checksumMatch = scene.fingerprints?.some(
-    (f) => f.hash === stashScene.checksum || f.hash === stashScene.oshash
+  const checksumMatch = scene.fingerprints?.some((f) =>
+    stashScene.files.some((ff) =>
+      ff.fingerprints.some(
+        (fp) =>
+          fp.value === f.hash && (fp.type === "oshash" || fp.type === "md5")
+      )
+    )
   );
-  const phashMatches = stashScene.phash
-    ? scene.fingerprints?.filter(
-        (f) =>
-          f.algorithm === "PHASH" && distance(f.hash, stashScene.phash) <= 8
-      ) ?? []
-    : [];
+
+  const allPhashes = stashScene.files.reduce(
+    (pv: Pick<GQL.Fingerprint, "type" | "value">[], cv) => {
+      return [...pv, ...cv.fingerprints.filter((f) => f.type === "phash")];
+    },
+    []
+  );
+
+  const phashMatches = matchPhashes(allPhashes, scene.fingerprints ?? []);
 
   const phashList = (
     <div className="m-2">
-      {phashMatches.map((fp) => (
-        <div key={fp.hash}>
-          <b>{fp.hash}</b>
-          {fp.hash === stashScene.phash
-            ? ", Exact match"
-            : `, distance ${distance(fp.hash, stashScene.phash)}`}
-        </div>
-      ))}
+      {phashMatches.map((fp: [string, number]) => {
+        const hash = fp[0];
+        const d = fp[1];
+        return (
+          <div key={hash}>
+            <b>{hash}</b>
+            {d === 0 ? ", Exact match" : `, distance ${d}`}
+          </div>
+        );
+      })}
     </div>
   );
 
   if (checksumMatch || phashMatches.length > 0)
     return (
-      <div className="font-weight-bold">
-        <SuccessIcon className="mr-2" />
-        {phashMatches.length > 0 ? (
-          <HoverPopover
-            placement="bottom"
-            content={phashList}
-            className="PHashPopover"
-          >
-            {phashMatches.length > 1 ? (
-              <FormattedMessage
-                id="component_tagger.results.phash_matches"
-                values={{
-                  count: phashMatches.length,
-                }}
-              />
-            ) : (
-              <FormattedMessage
-                id="component_tagger.results.hash_matches"
-                values={{
-                  hash_type: <FormattedMessage id="media_info.phash" />,
-                }}
-              />
-            )}
-          </HoverPopover>
-        ) : (
-          <FormattedMessage
-            id="component_tagger.results.hash_matches"
-            values={{
-              hash_type: <FormattedMessage id="media_info.checksum" />,
-            }}
-          />
+      <div>
+        {phashMatches.length > 0 && (
+          <div className="font-weight-bold">
+            <SuccessIcon className="mr-2" />
+            <HoverPopover
+              placement="bottom"
+              content={phashList}
+              className="PHashPopover"
+            >
+              {phashMatches.length > 1 ? (
+                <FormattedMessage
+                  id="component_tagger.results.phash_matches"
+                  values={{
+                    count: phashMatches.length,
+                  }}
+                />
+              ) : (
+                <FormattedMessage
+                  id="component_tagger.results.hash_matches"
+                  values={{
+                    hash_type: <FormattedMessage id="media_info.phash" />,
+                  }}
+                />
+              )}
+            </HoverPopover>
+          </div>
+        )}
+        {checksumMatch && (
+          <div className="font-weight-bold">
+            <SuccessIcon className="mr-2" />
+            <FormattedMessage
+              id="component_tagger.results.hash_matches"
+              values={{
+                hash_type: <FormattedMessage id="media_info.checksum" />,
+              }}
+            />
+          </div>
         )}
       </div>
     );
@@ -160,6 +205,7 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
     createNewPerformer,
     linkPerformer,
     createNewStudio,
+    updateStudio,
     linkStudio,
     resolveScene,
     currentSource,
@@ -256,13 +302,14 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
     }
   }, [isActive, loading, stashScene, index, resolveScene, scene]);
 
+  const stashBoxBaseURL = currentSource?.stashboxEndpoint
+    ? getStashboxBase(currentSource.stashboxEndpoint)
+    : undefined;
   const stashBoxURL = useMemo(() => {
-    if (currentSource?.stashboxEndpoint && scene.remote_site_id) {
-      const endpoint = currentSource.stashboxEndpoint;
-      const endpointBase = endpoint.match(/https?:\/\/.*?\//)?.[0];
-      return `${endpointBase}scenes/${scene.remote_site_id}`;
+    if (stashBoxBaseURL) {
+      return `${stashBoxBaseURL}scenes/${scene.remote_site_id}`;
     }
-  }, [currentSource, scene]);
+  }, [scene, stashBoxBaseURL]);
 
   const setExcludedField = (name: string, value: boolean) =>
     setExcludedFields({
@@ -316,13 +363,20 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
       ),
       studio_id: studioID,
       cover_image: resolveField("cover_image", undefined, imgData),
-      url: resolveField("url", stashScene.url, scene.url),
       tag_ids: tagIDs,
       stash_ids: stashScene.stash_ids ?? [],
+      code: resolveField("code", stashScene.code, scene.code),
+      director: resolveField("director", stashScene.director, scene.director),
     };
 
-    const includeStashID = !excludedFieldList.includes("stash_ids");
+    const includeUrl = !excludedFieldList.includes("url");
+    if (includeUrl && scene.urls) {
+      sceneCreateInput.urls = uniq(stashScene.urls.concat(scene.urls));
+    } else {
+      sceneCreateInput.urls = stashScene.urls;
+    }
 
+    const includeStashID = !excludedFieldList.includes("stash_ids");
     if (
       includeStashID &&
       currentSource?.stashboxEndpoint &&
@@ -350,26 +404,41 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
     await saveScene(sceneCreateInput, includeStashID);
   }
 
-  function performerModalCallback(
-    toCreate?: GQL.PerformerCreateInput | undefined
+  function showPerformerModal(t: GQL.ScrapedPerformer) {
+    createPerformerModal(t, (toCreate) => {
+      if (toCreate) {
+        createNewPerformer(t, toCreate);
+      }
+    });
+  }
+
+  async function studioModalCallback(
+    studio: GQL.ScrapedStudio,
+    toCreate?: GQL.StudioCreateInput,
+    parentInput?: GQL.StudioCreateInput
   ) {
     if (toCreate) {
-      createNewPerformer(toCreate);
-    }
-  }
+      if (parentInput && studio.parent) {
+        if (toCreate.parent_id) {
+          const parentUpdateData: GQL.StudioUpdateInput = {
+            ...parentInput,
+            id: toCreate.parent_id,
+          };
+          await updateStudio(parentUpdateData);
+        } else {
+          const parentID = await createNewStudio(studio.parent, parentInput);
+          toCreate.parent_id = parentID;
+        }
+      }
 
-  function showPerformerModal(t: GQL.ScrapedPerformer) {
-    createPerformerModal(t, performerModalCallback);
-  }
-
-  function studioModalCallback(toCreate?: GQL.StudioCreateInput | undefined) {
-    if (toCreate) {
-      createNewStudio(toCreate);
+      createNewStudio(studio, toCreate);
     }
   }
 
   function showStudioModal(t: GQL.ScrapedStudio) {
-    createStudioModal(t, studioModalCallback);
+    createStudioModal(t, (toCreate, parentInput) => {
+      studioModalCallback(t, toCreate, parentInput);
+    });
   }
 
   // constants to get around dot-notation eslint rule
@@ -381,6 +450,8 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
     details: "details",
     studio: "studio",
     stash_ids: "stash_ids",
+    code: "code",
+    director: "director",
   };
 
   const maybeRenderCoverImage = () => {
@@ -414,9 +485,11 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
       );
     }
 
-    const sceneTitleEl = scene.url ? (
+    const url = scene.urls?.length ? scene.urls[0] : null;
+
+    const sceneTitleEl = url ? (
       <a
-        href={scene.url}
+        href={url}
         target="_blank"
         rel="noopener noreferrer"
         className="scene-link"
@@ -464,6 +537,21 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
     }
   };
 
+  const maybeRenderStudioCode = () => {
+    if (isActive && scene.code) {
+      return (
+        <h5>
+          <OptionalField
+            exclude={excludedFields[fields.code]}
+            setExclude={(v) => setExcludedField(fields.code, v)}
+          >
+            {scene.code}
+          </OptionalField>
+        </h5>
+      );
+    }
+  };
+
   const maybeRenderDateField = () => {
     if (isActive && scene.date) {
       return (
@@ -479,17 +567,36 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
     }
   };
 
+  const maybeRenderDirector = () => {
+    if (scene.director) {
+      return (
+        <h5>
+          <OptionalField
+            exclude={excludedFields[fields.director]}
+            setExclude={(v) => setExcludedField(fields.director, v)}
+          >
+            <FormattedMessage id="director" />: {scene.director}
+          </OptionalField>
+        </h5>
+      );
+    }
+  };
+
   const maybeRenderURL = () => {
-    if (scene.url) {
+    if (scene.urls) {
       return (
         <div className="scene-details">
           <OptionalField
             exclude={excludedFields[fields.url]}
             setExclude={(v) => setExcludedField(fields.url, v)}
           >
-            <a href={scene.url} target="_blank" rel="noopener noreferrer">
-              {scene.url}
-            </a>
+            {scene.urls.map((url) => (
+              <div key={url}>
+                <a href={url} target="_blank" rel="noopener noreferrer">
+                  {url}
+                </a>
+              </div>
+            ))}
           </OptionalField>
         </div>
       );
@@ -576,33 +683,37 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
   );
 
   async function onCreateTag(t: GQL.ScrapedTag) {
-    const newTagID = await createNewTag(t);
+    const toCreate: GQL.TagCreateInput = { name: t.name };
+    const newTagID = await createNewTag(t, toCreate);
     if (newTagID !== undefined) {
       setTagIDs([...tagIDs, newTagID]);
     }
   }
 
-  const renderTagsField = () => (
-    <div className="mt-2">
-      <div>
-        <Form.Group controlId="tags" as={Row}>
-          {FormUtils.renderLabel({
-            title: `${intl.formatMessage({ id: "tags" })}:`,
-          })}
-          <Col sm={9} xl={12}>
-            <TagSelect
-              isMulti
-              onSelect={(items) => {
-                setTagIDs(items.map((i) => i.id));
-              }}
-              ids={tagIDs}
-            />
-          </Col>
-        </Form.Group>
-      </div>
-      {scene.tags
-        ?.filter((t) => !t.stored_id)
-        .map((t) => (
+  function maybeRenderTagsField() {
+    if (!config.setTags) return;
+
+    const createTags = scene.tags?.filter((t) => !t.stored_id);
+
+    return (
+      <div className="mt-2">
+        <div>
+          <Form.Group controlId="tags" as={Row}>
+            {FormUtils.renderLabel({
+              title: `${intl.formatMessage({ id: "tags" })}:`,
+            })}
+            <Col sm={9} xl={12}>
+              <TagSelect
+                isMulti
+                onSelect={(items) => {
+                  setTagIDs(items.map((i) => i.id));
+                }}
+                ids={tagIDs}
+              />
+            </Col>
+          </Form.Group>
+        </div>
+        {createTags?.map((t) => (
           <Badge
             className="tag-item"
             variant="secondary"
@@ -617,12 +728,16 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
             </Button>
           </Badge>
         ))}
-    </div>
-  );
+      </div>
+    );
+  }
 
   if (loading) {
     return <LoadingIndicator card />;
   }
+
+  const stashSceneFile =
+    stashScene.files.length > 0 ? stashScene.files[0] : undefined;
 
   return (
     <>
@@ -639,14 +754,16 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
               </>
             )}
 
+            {maybeRenderStudioCode()}
             {maybeRenderDateField()}
-            {getDurationStatus(scene, stashScene.file?.duration)}
+            {getDurationStatus(scene, stashSceneFile?.duration)}
             {getFingerprintStatus(scene, stashScene)}
           </div>
         </div>
         {isActive && (
           <div className="d-flex flex-column">
             {maybeRenderStashBoxID()}
+            {maybeRenderDirector()}
             {maybeRenderURL()}
             {maybeRenderDetails()}
           </div>
@@ -656,7 +773,7 @@ const StashSearchResult: React.FC<IStashSearchResultProps> = ({
         <div className="col-lg-6">
           {maybeRenderStudioField()}
           {renderPerformerField()}
-          {renderTagsField()}
+          {maybeRenderTagsField()}
 
           <div className="row no-gutters mt-2 align-items-center justify-content-end">
             <OperationButton operation={handleSave}>

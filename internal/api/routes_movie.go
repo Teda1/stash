@@ -2,25 +2,34 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
-	"github.com/go-chi/chi"
-	"github.com/stashapp/stash/internal/manager"
+	"github.com/go-chi/chi/v5"
+
+	"github.com/stashapp/stash/internal/static"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/utils"
 )
 
+type MovieFinder interface {
+	models.MovieGetter
+	GetFrontImage(ctx context.Context, movieID int) ([]byte, error)
+	GetBackImage(ctx context.Context, movieID int) ([]byte, error)
+}
+
 type movieRoutes struct {
-	txnManager models.TransactionManager
+	routes
+	movieFinder MovieFinder
 }
 
 func (rs movieRoutes) Routes() chi.Router {
 	r := chi.NewRouter()
 
 	r.Route("/{movieId}", func(r chi.Router) {
-		r.Use(MovieCtx)
+		r.Use(rs.MovieCtx)
 		r.Get("/frontimage", rs.FrontImage)
 		r.Get("/backimage", rs.BackImage)
 	})
@@ -33,22 +42,25 @@ func (rs movieRoutes) FrontImage(w http.ResponseWriter, r *http.Request) {
 	defaultParam := r.URL.Query().Get("default")
 	var image []byte
 	if defaultParam != "true" {
-		err := rs.txnManager.WithReadTxn(r.Context(), func(repo models.ReaderRepository) error {
-			image, _ = repo.Movie().GetFrontImage(movie.ID)
-			return nil
+		readTxnErr := rs.withReadTxn(r, func(ctx context.Context) error {
+			var err error
+			image, err = rs.movieFinder.GetFrontImage(ctx, movie.ID)
+			return err
 		})
-		if err != nil {
-			logger.Warnf("read transaction error while getting front image: %v", err)
+		if errors.Is(readTxnErr, context.Canceled) {
+			return
+		}
+		if readTxnErr != nil {
+			logger.Warnf("read transaction error on fetch movie front image: %v", readTxnErr)
 		}
 	}
 
+	// fallback to default image
 	if len(image) == 0 {
-		image, _ = utils.ProcessBase64Image(models.DefaultMovieImage)
+		image = static.ReadAll(static.DefaultMovieImage)
 	}
 
-	if err := utils.ServeImage(image, w, r); err != nil {
-		logger.Warnf("error serving front image: %v", err)
-	}
+	utils.ServeImage(w, r, image)
 }
 
 func (rs movieRoutes) BackImage(w http.ResponseWriter, r *http.Request) {
@@ -56,25 +68,28 @@ func (rs movieRoutes) BackImage(w http.ResponseWriter, r *http.Request) {
 	defaultParam := r.URL.Query().Get("default")
 	var image []byte
 	if defaultParam != "true" {
-		err := rs.txnManager.WithReadTxn(r.Context(), func(repo models.ReaderRepository) error {
-			image, _ = repo.Movie().GetBackImage(movie.ID)
-			return nil
+		readTxnErr := rs.withReadTxn(r, func(ctx context.Context) error {
+			var err error
+			image, err = rs.movieFinder.GetBackImage(ctx, movie.ID)
+			return err
 		})
-		if err != nil {
-			logger.Warnf("read transaction error on fetch back image: %v", err)
+		if errors.Is(readTxnErr, context.Canceled) {
+			return
+		}
+		if readTxnErr != nil {
+			logger.Warnf("read transaction error on fetch movie back image: %v", readTxnErr)
 		}
 	}
 
+	// fallback to default image
 	if len(image) == 0 {
-		image, _ = utils.ProcessBase64Image(models.DefaultMovieImage)
+		image = static.ReadAll(static.DefaultMovieImage)
 	}
 
-	if err := utils.ServeImage(image, w, r); err != nil {
-		logger.Warnf("error while serving image: %v", err)
-	}
+	utils.ServeImage(w, r, image)
 }
 
-func MovieCtx(next http.Handler) http.Handler {
+func (rs movieRoutes) MovieCtx(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		movieID, err := strconv.Atoi(chi.URLParam(r, "movieId"))
 		if err != nil {
@@ -83,11 +98,11 @@ func MovieCtx(next http.Handler) http.Handler {
 		}
 
 		var movie *models.Movie
-		if err := manager.GetInstance().TxnManager.WithReadTxn(r.Context(), func(repo models.ReaderRepository) error {
-			var err error
-			movie, err = repo.Movie().Find(movieID)
-			return err
-		}); err != nil {
+		_ = rs.withReadTxn(r, func(ctx context.Context) error {
+			movie, _ = rs.movieFinder.Find(ctx, movieID)
+			return nil
+		})
+		if movie == nil {
 			http.Error(w, http.StatusText(404), 404)
 			return
 		}

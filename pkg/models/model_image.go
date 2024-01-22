@@ -1,7 +1,7 @@
 package models
 
 import (
-	"database/sql"
+	"context"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -9,104 +9,141 @@ import (
 
 // Image stores the metadata for a single image.
 type Image struct {
-	ID          int                 `db:"id" json:"id"`
-	Checksum    string              `db:"checksum" json:"checksum"`
-	Path        string              `db:"path" json:"path"`
-	Title       sql.NullString      `db:"title" json:"title"`
-	Rating      sql.NullInt64       `db:"rating" json:"rating"`
-	Organized   bool                `db:"organized" json:"organized"`
-	OCounter    int                 `db:"o_counter" json:"o_counter"`
-	Size        sql.NullInt64       `db:"size" json:"size"`
-	Width       sql.NullInt64       `db:"width" json:"width"`
-	Height      sql.NullInt64       `db:"height" json:"height"`
-	StudioID    sql.NullInt64       `db:"studio_id,omitempty" json:"studio_id"`
-	FileModTime NullSQLiteTimestamp `db:"file_mod_time" json:"file_mod_time"`
-	CreatedAt   SQLiteTimestamp     `db:"created_at" json:"created_at"`
-	UpdatedAt   SQLiteTimestamp     `db:"updated_at" json:"updated_at"`
+	ID int `json:"id"`
+
+	Title        string `json:"title"`
+	Code         string `json:"code"`
+	Details      string `json:"details"`
+	Photographer string `json:"photographer"`
+	// Rating expressed in 1-100 scale
+	Rating    *int           `json:"rating"`
+	Organized bool           `json:"organized"`
+	OCounter  int            `json:"o_counter"`
+	StudioID  *int           `json:"studio_id"`
+	URLs      RelatedStrings `json:"urls"`
+	Date      *Date          `json:"date"`
+
+	// transient - not persisted
+	Files         RelatedFiles
+	PrimaryFileID *FileID
+	// transient - path of primary file - empty if no files
+	Path string
+	// transient - checksum of primary file - empty if no files
+	Checksum string
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	GalleryIDs   RelatedIDs `json:"gallery_ids"`
+	TagIDs       RelatedIDs `json:"tag_ids"`
+	PerformerIDs RelatedIDs `json:"performer_ids"`
 }
 
-// ImagePartial represents part of a Image object. It is used to update
-// the database entry. Only non-nil fields will be updated.
+func NewImage() Image {
+	currentTime := time.Now()
+	return Image{
+		CreatedAt: currentTime,
+		UpdatedAt: currentTime,
+	}
+}
+
 type ImagePartial struct {
-	ID          int                  `db:"id" json:"id"`
-	Checksum    *string              `db:"checksum" json:"checksum"`
-	Path        *string              `db:"path" json:"path"`
-	Title       *sql.NullString      `db:"title" json:"title"`
-	Rating      *sql.NullInt64       `db:"rating" json:"rating"`
-	Organized   *bool                `db:"organized" json:"organized"`
-	Size        *sql.NullInt64       `db:"size" json:"size"`
-	Width       *sql.NullInt64       `db:"width" json:"width"`
-	Height      *sql.NullInt64       `db:"height" json:"height"`
-	StudioID    *sql.NullInt64       `db:"studio_id,omitempty" json:"studio_id"`
-	FileModTime *NullSQLiteTimestamp `db:"file_mod_time" json:"file_mod_time"`
-	CreatedAt   *SQLiteTimestamp     `db:"created_at" json:"created_at"`
-	UpdatedAt   *SQLiteTimestamp     `db:"updated_at" json:"updated_at"`
+	Title OptionalString
+	Code  OptionalString
+	// Rating expressed in 1-100 scale
+	Rating       OptionalInt
+	URLs         *UpdateStrings
+	Date         OptionalDate
+	Details      OptionalString
+	Photographer OptionalString
+	Organized    OptionalBool
+	OCounter     OptionalInt
+	StudioID     OptionalInt
+	CreatedAt    OptionalTime
+	UpdatedAt    OptionalTime
+
+	GalleryIDs    *UpdateIDs
+	TagIDs        *UpdateIDs
+	PerformerIDs  *UpdateIDs
+	PrimaryFileID *FileID
 }
 
-func (i *Image) File() File {
-	ret := File{
-		Path: i.Path,
+func NewImagePartial() ImagePartial {
+	currentTime := time.Now()
+	return ImagePartial{
+		UpdatedAt: NewOptionalTime(currentTime),
 	}
-
-	ret.Checksum = i.Checksum
-	if i.FileModTime.Valid {
-		ret.FileModTime = i.FileModTime.Timestamp
-	}
-	if i.Size.Valid {
-		ret.Size = strconv.FormatInt(i.Size.Int64, 10)
-	}
-
-	return ret
 }
 
-func (i *Image) SetFile(f File) {
-	path := f.Path
-	i.Path = path
+func (i *Image) LoadURLs(ctx context.Context, l URLLoader) error {
+	return i.URLs.load(func() ([]string, error) {
+		return l.GetURLs(ctx, i.ID)
+	})
+}
 
-	if f.Checksum != "" {
-		i.Checksum = f.Checksum
-	}
-	zeroTime := time.Time{}
-	if f.FileModTime != zeroTime {
-		i.FileModTime = NullSQLiteTimestamp{
-			Timestamp: f.FileModTime,
-			Valid:     true,
+func (i *Image) LoadFiles(ctx context.Context, l FileLoader) error {
+	return i.Files.load(func() ([]File, error) {
+		return l.GetFiles(ctx, i.ID)
+	})
+}
+
+func (i *Image) LoadPrimaryFile(ctx context.Context, l FileGetter) error {
+	return i.Files.loadPrimary(func() (File, error) {
+		if i.PrimaryFileID == nil {
+			return nil, nil
 		}
-	}
-	if f.Size != "" {
-		size, err := strconv.ParseInt(f.Size, 10, 64)
-		if err == nil {
-			i.Size = sql.NullInt64{
-				Int64: size,
-				Valid: true,
-			}
+
+		f, err := l.Find(ctx, *i.PrimaryFileID)
+		if err != nil {
+			return nil, err
 		}
-	}
+
+		if len(f) > 0 {
+			return f[0], nil
+		}
+
+		return nil, nil
+	})
+}
+
+func (i *Image) LoadGalleryIDs(ctx context.Context, l GalleryIDLoader) error {
+	return i.GalleryIDs.load(func() ([]int, error) {
+		return l.GetGalleryIDs(ctx, i.ID)
+	})
+}
+
+func (i *Image) LoadPerformerIDs(ctx context.Context, l PerformerIDLoader) error {
+	return i.PerformerIDs.load(func() ([]int, error) {
+		return l.GetPerformerIDs(ctx, i.ID)
+	})
+}
+
+func (i *Image) LoadTagIDs(ctx context.Context, l TagIDLoader) error {
+	return i.TagIDs.load(func() ([]int, error) {
+		return l.GetTagIDs(ctx, i.ID)
+	})
 }
 
 // GetTitle returns the title of the image. If the Title field is empty,
 // then the base filename is returned.
-func (i *Image) GetTitle() string {
-	if i.Title.String != "" {
-		return i.Title.String
+func (i Image) GetTitle() string {
+	if i.Title != "" {
+		return i.Title
 	}
 
-	return filepath.Base(i.Path)
+	if i.Path != "" {
+		return filepath.Base(i.Path)
+	}
+
+	return ""
 }
 
-// ImageFileType represents the file metadata for an image.
-type ImageFileType struct {
-	Size   *int `graphql:"size" json:"size"`
-	Width  *int `graphql:"width" json:"width"`
-	Height *int `graphql:"height" json:"height"`
-}
+// DisplayName returns a display name for the scene for logging purposes.
+// It returns Path if not empty, otherwise it returns the ID.
+func (i Image) DisplayName() string {
+	if i.Path != "" {
+		return i.Path
+	}
 
-type Images []*Image
-
-func (i *Images) Append(o interface{}) {
-	*i = append(*i, o.(*Image))
-}
-
-func (i *Images) New() interface{} {
-	return &Image{}
+	return strconv.Itoa(i.ID)
 }

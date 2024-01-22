@@ -3,14 +3,25 @@ import {
   faImage,
   faImages,
   faPlayCircle,
+  faUser,
+  faMapMarkerAlt,
 } from "@fortawesome/free-solid-svg-icons";
-import React from "react";
-import { Button } from "react-bootstrap";
-import { useIntl } from "react-intl";
+import React, { useMemo } from "react";
+import { Button, OverlayTrigger, Tooltip } from "react-bootstrap";
+import { FormattedNumber, useIntl } from "react-intl";
 import { Link } from "react-router-dom";
-import Icon from "./Icon";
+import { IUIConfig } from "src/core/config";
+import { ConfigurationContext } from "src/hooks/Config";
+import TextUtils from "src/utils/text";
+import { Icon } from "./Icon";
 
-type PopoverLinkType = "scene" | "image" | "gallery" | "movie";
+type PopoverLinkType =
+  | "scene"
+  | "image"
+  | "gallery"
+  | "marker"
+  | "movie"
+  | "performer";
 
 interface IProps {
   className?: string;
@@ -25,6 +36,10 @@ export const PopoverCountButton: React.FC<IProps> = ({
   type,
   count,
 }) => {
+  const { configuration } = React.useContext(ConfigurationContext);
+  const abbreviateCounter =
+    (configuration?.ui as IUIConfig)?.abbreviateCounters ?? false;
+
   const intl = useIntl();
 
   function getIcon() {
@@ -35,8 +50,12 @@ export const PopoverCountButton: React.FC<IProps> = ({
         return faImage;
       case "gallery":
         return faImages;
+      case "marker":
+        return faMapMarkerAlt;
       case "movie":
         return faFilm;
+      case "performer":
+        return faUser;
     }
   }
 
@@ -57,10 +76,20 @@ export const PopoverCountButton: React.FC<IProps> = ({
           one: "gallery",
           other: "galleries",
         };
+      case "marker":
+        return {
+          one: "marker",
+          other: "markers",
+        };
       case "movie":
         return {
           one: "movie",
           other: "movies",
+        };
+      case "performer":
+        return {
+          one: "performer",
+          other: "performers",
         };
     }
   }
@@ -72,12 +101,36 @@ export const PopoverCountButton: React.FC<IProps> = ({
     return `${count} ${plural}`;
   }
 
+  const countEl = useMemo(() => {
+    if (!abbreviateCounter) {
+      return count;
+    }
+
+    const formatted = TextUtils.abbreviateCounter(count);
+    return (
+      <span>
+        <FormattedNumber
+          value={formatted.size}
+          maximumFractionDigits={formatted.digits}
+        />
+        {formatted.unit}
+      </span>
+    );
+  }, [count, abbreviateCounter]);
+
   return (
-    <Link className={className} to={url} title={getTitle()}>
-      <Button className="minimal">
-        <Icon icon={getIcon()} />
-        <span>{count}</span>
-      </Button>
-    </Link>
+    <>
+      <OverlayTrigger
+        overlay={<Tooltip id={`${type}-count-tooltip`}>{getTitle()}</Tooltip>}
+        placement="bottom"
+      >
+        <Link className={className} to={url}>
+          <Button className="minimal">
+            <Icon icon={getIcon()} />
+            <span>{countEl}</span>
+          </Button>
+        </Link>
+      </OverlayTrigger>
+    </>
   );
 };

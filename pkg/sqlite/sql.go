@@ -1,18 +1,15 @@
 package sqlite
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/stashapp/stash/pkg/models"
 )
-
-var randomSortFloat = rand.Float64()
 
 func selectAll(tableName string) string {
 	idColumn := getColumn(tableName, "*")
@@ -64,54 +61,77 @@ func getSort(sort string, direction string, tableName string) string {
 		return " ORDER BY COUNT(distinct " + colName + ") " + direction
 	case strings.Compare(sort, "filesize") == 0:
 		colName := getColumn(tableName, "size")
-		return " ORDER BY cast(" + colName + " as integer) " + direction
-	case strings.Compare(sort, "perceptual_similarity") == 0:
-		colName := getColumn(tableName, "phash")
-		secondaryColName := getColumn(tableName, "size")
-		return " ORDER BY " + colName + " " + direction + ", " + secondaryColName + " DESC"
+		return " ORDER BY " + colName + " " + direction
 	case strings.HasPrefix(sort, randomSeedPrefix):
 		// seed as a parameter from the UI
-		// turn the provided seed into a float
-		seedStr := "0." + sort[len(randomSeedPrefix):]
-		seed, err := strconv.ParseFloat(seedStr, 32)
+		seedStr := sort[len(randomSeedPrefix):]
+		seed, err := strconv.ParseUint(seedStr, 10, 64)
 		if err != nil {
-			// fallback to default seed
-			seed = randomSortFloat
+			// fallback to a random seed
+			seed = rand.Uint64()
 		}
 		return getRandomSort(tableName, direction, seed)
 	case strings.Compare(sort, "random") == 0:
-		return getRandomSort(tableName, direction, randomSortFloat)
+		return getRandomSort(tableName, direction, rand.Uint64())
 	default:
 		colName := getColumn(tableName, sort)
-		var additional string
-		if tableName == "scenes" {
-			additional = ", bitrate DESC, framerate DESC, scenes.rating DESC, scenes.duration DESC"
-		} else if tableName == "scene_markers" {
-			additional = ", scene_markers.scene_id ASC, scene_markers.seconds ASC"
+		if strings.Contains(sort, ".") {
+			colName = sort
 		}
 		if strings.Compare(sort, "name") == 0 {
-			return " ORDER BY " + colName + " COLLATE NOCASE " + direction + additional
+			return " ORDER BY " + colName + " COLLATE NATURAL_CI " + direction
 		}
 		if strings.Compare(sort, "title") == 0 {
-			return " ORDER BY " + colName + " COLLATE NATURAL_CS " + direction + additional
+			return " ORDER BY " + colName + " COLLATE NATURAL_CI " + direction
 		}
 
-		return " ORDER BY " + colName + " " + direction + additional
+		return " ORDER BY " + colName + " " + direction
 	}
 }
 
-func getRandomSort(tableName string, direction string, seed float64) string {
-	// https://stackoverflow.com/a/24511461
+func getRandomSort(tableName string, direction string, seed uint64) string {
+	// cap seed at 10^8
+	seed %= 1e8
+
 	colName := getColumn(tableName, "id")
-	randomSortString := strconv.FormatFloat(seed, 'f', 16, 32)
-	return " ORDER BY " + "(substr(" + colName + " * " + randomSortString + ", length(" + colName + ") + 2))" + " " + direction
+
+	// https://stackoverflow.com/questions/21949795#comment33255354_21949859
+	// p1 := 52959209
+	// p2 := 1047483763
+	// p3 := 2147483647
+	// n := <colName>
+	// ORDER BY ((n+seed)*(n+seed)*p1 + (n+seed)*p2) % p3
+	// since sqlite converts overflowing numbers to reals, a custom db function that uses uints with overflow should be faster,
+	// however in practice the overhead of calling a custom function vastly outweighs the benefits
+	return fmt.Sprintf(" ORDER BY mod((%[1]s + %[2]d) * (%[1]s + %[2]d) * 52959209 + (%[1]s + %[2]d) * 1047483763, 2147483647) %[3]s", colName, seed, direction)
 }
 
 func getCountSort(primaryTable, joinTable, primaryFK, direction string) string {
 	return fmt.Sprintf(" ORDER BY (SELECT COUNT(*) FROM %s WHERE %s = %s.id) %s", joinTable, primaryFK, primaryTable, getSortDirection(direction))
 }
 
-func getSearchBinding(columns []string, q string, not bool) (string, []interface{}) {
+func getMultiSumSort(sum string, primaryTable, foreignTable1, joinTable1, foreignTable2, joinTable2, primaryFK, foreignFK1, foreignFK2, direction string) string {
+	return fmt.Sprintf(" ORDER BY (SELECT SUM(%s) "+
+		"FROM ("+
+		"SELECT SUM(%s) as %s from %s s "+
+		"LEFT JOIN %s ON %s.id = s.%s "+
+		"WHERE s.%s = %s.id "+
+		"UNION ALL "+
+		"SELECT SUM(%s) as %s from %s s "+
+		"LEFT JOIN %s ON %s.id = s.%s "+
+		"WHERE s.%s = %s.id "+
+		")) %s",
+		sum,
+		sum, sum, joinTable1,
+		foreignTable1, foreignTable1, foreignFK1,
+		primaryFK, primaryTable,
+		sum, sum, joinTable2,
+		foreignTable2, foreignTable2, foreignFK2,
+		primaryFK, primaryTable,
+		getSortDirection(direction))
+}
+
+func getStringSearchClause(columns []string, q string, not bool) sqlClause {
 	var likeClauses []string
 	var args []interface{}
 
@@ -143,7 +163,23 @@ func getSearchBinding(columns []string, q string, not bool) (string, []interface
 	}
 	likes := strings.Join(likeClauses, binaryType)
 
-	return "(" + likes + ")", args
+	return makeClause("("+likes+")", args...)
+}
+
+func getEnumSearchClause(column string, enumVals []string, not bool) sqlClause {
+	var args []interface{}
+
+	notStr := ""
+	if not {
+		notStr = " NOT"
+	}
+
+	clause := fmt.Sprintf("(%s%s IN %s)", column, notStr, getInBinding(len(enumVals)))
+	for _, enumVal := range enumVals {
+		args = append(args, enumVal)
+	}
+
+	return makeClause(clause, args...)
 }
 
 func getInBinding(length int) string {
@@ -159,6 +195,94 @@ func getIntCriterionWhereClause(column string, input models.IntCriterionInput) (
 func getIntWhereClause(column string, modifier models.CriterionModifier, value int, upper *int) (string, []interface{}) {
 	if upper == nil {
 		u := 0
+		upper = &u
+	}
+
+	args := []interface{}{value, *upper}
+	return getNumericWhereClause(column, modifier, args)
+}
+
+func getFloatCriterionWhereClause(column string, input models.FloatCriterionInput) (string, []interface{}) {
+	return getFloatWhereClause(column, input.Modifier, input.Value, input.Value2)
+}
+
+func getFloatWhereClause(column string, modifier models.CriterionModifier, value float64, upper *float64) (string, []interface{}) {
+	if upper == nil {
+		u := 0.0
+		upper = &u
+	}
+
+	args := []interface{}{value, *upper}
+	return getNumericWhereClause(column, modifier, args)
+}
+
+func getNumericWhereClause(column string, modifier models.CriterionModifier, args []interface{}) (string, []interface{}) {
+	singleArgs := args[0:1]
+
+	switch modifier {
+	case models.CriterionModifierIsNull:
+		return fmt.Sprintf("%s IS NULL", column), nil
+	case models.CriterionModifierNotNull:
+		return fmt.Sprintf("%s IS NOT NULL", column), nil
+	case models.CriterionModifierEquals:
+		return fmt.Sprintf("%s = ?", column), singleArgs
+	case models.CriterionModifierNotEquals:
+		return fmt.Sprintf("%s != ?", column), singleArgs
+	case models.CriterionModifierBetween:
+		return fmt.Sprintf("%s BETWEEN ? AND ?", column), args
+	case models.CriterionModifierNotBetween:
+		return fmt.Sprintf("%s NOT BETWEEN ? AND ?", column), args
+	case models.CriterionModifierLessThan:
+		return fmt.Sprintf("%s < ?", column), singleArgs
+	case models.CriterionModifierGreaterThan:
+		return fmt.Sprintf("%s > ?", column), singleArgs
+	}
+
+	panic("unsupported numeric modifier type " + modifier)
+}
+
+func getDateCriterionWhereClause(column string, input models.DateCriterionInput) (string, []interface{}) {
+	return getDateWhereClause(column, input.Modifier, input.Value, input.Value2)
+}
+
+func getDateWhereClause(column string, modifier models.CriterionModifier, value string, upper *string) (string, []interface{}) {
+	if upper == nil {
+		u := time.Now().AddDate(0, 0, 1).Format(time.RFC3339)
+		upper = &u
+	}
+
+	args := []interface{}{value}
+	betweenArgs := []interface{}{value, *upper}
+
+	switch modifier {
+	case models.CriterionModifierIsNull:
+		return fmt.Sprintf("(%s IS NULL OR %s = '')", column, column), nil
+	case models.CriterionModifierNotNull:
+		return fmt.Sprintf("(%s IS NOT NULL AND %s != '')", column, column), nil
+	case models.CriterionModifierEquals:
+		return fmt.Sprintf("%s = ?", column), args
+	case models.CriterionModifierNotEquals:
+		return fmt.Sprintf("%s != ?", column), args
+	case models.CriterionModifierBetween:
+		return fmt.Sprintf("%s BETWEEN ? AND ?", column), betweenArgs
+	case models.CriterionModifierNotBetween:
+		return fmt.Sprintf("%s NOT BETWEEN ? AND ?", column), betweenArgs
+	case models.CriterionModifierLessThan:
+		return fmt.Sprintf("%s < ?", column), args
+	case models.CriterionModifierGreaterThan:
+		return fmt.Sprintf("%s > ?", column), args
+	}
+
+	panic("unsupported date modifier type")
+}
+
+func getTimestampCriterionWhereClause(column string, input models.TimestampCriterionInput) (string, []interface{}) {
+	return getTimestampWhereClause(column, input.Modifier, input.Value, input.Value2)
+}
+
+func getTimestampWhereClause(column string, modifier models.CriterionModifier, value string, upper *string) (string, []interface{}) {
+	if upper == nil {
+		u := time.Now().AddDate(0, 0, 1).Format(time.RFC3339)
 		upper = &u
 	}
 
@@ -184,7 +308,7 @@ func getIntWhereClause(column string, modifier models.CriterionModifier, value i
 		return fmt.Sprintf("%s > ?", column), args
 	}
 
-	panic("unsupported int modifier type")
+	panic("unsupported date modifier type")
 }
 
 // returns where clause and having clause
@@ -225,26 +349,26 @@ func getCountCriterionClause(primaryTable, joinTable, primaryFK string, criterio
 	return getIntCriterionWhereClause(lhs, criterion)
 }
 
-func getImage(tx dbi, query string, args ...interface{}) ([]byte, error) {
-	rows, err := tx.Queryx(query, args...)
-
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var ret []byte
-	if rows.Next() {
-		if err := rows.Scan(&ret); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return ret, nil
+func getJoinedMultiSumCriterionClause(primaryTable, foreignTable1, joinTable1, foreignTable2, joinTable2, primaryFK string, foreignFK1 string, foreignFK2 string, sum string, criterion models.IntCriterionInput) (string, []interface{}) {
+	lhs := fmt.Sprintf("(SELECT SUM(%s) "+
+		"FROM ("+
+		"SELECT SUM(%s) as %s from %s s "+
+		"LEFT JOIN %s ON %s.id = s.%s "+
+		"WHERE s.%s = %s.id "+
+		"UNION ALL "+
+		"SELECT SUM(%s) as %s from %s s "+
+		"LEFT JOIN %s ON %s.id = s.%s "+
+		"WHERE s.%s = %s.id "+
+		"))",
+		sum,
+		sum, sum, joinTable1,
+		foreignTable1, foreignTable1, foreignFK1,
+		primaryFK, primaryTable,
+		sum, sum, joinTable2,
+		foreignTable2, foreignTable2, foreignFK2,
+		primaryFK, primaryTable,
+	)
+	return getIntCriterionWhereClause(lhs, criterion)
 }
 
 func coalesce(column string) string {

@@ -1,41 +1,42 @@
-"""Gallery type"""
+"Gallery type"
 type Gallery {
   id: ID!
-  checksum: String!
-  path: String
   title: String
-  url: String
+  code: String
+  url: String @deprecated(reason: "Use urls")
+  urls: [String!]!
   date: String
   details: String
-  rating: Int
+  photographer: String
+  # rating expressed as 1-100
+  rating100: Int
   organized: Boolean!
   created_at: Time!
   updated_at: Time!
-  file_mod_time: Time
 
+  files: [GalleryFile!]!
+  folder: Folder
+
+  chapters: [GalleryChapter!]!
   scenes: [Scene!]!
   studio: Studio
   image_count: Int!
   tags: [Tag!]!
   performers: [Performer!]!
 
-  """The images in the gallery"""
-  images: [Image!]! # Resolver
   cover: Image
-}
-
-type GalleryFilesType {
-  index: Int!
-  name: String
-  path: String
 }
 
 input GalleryCreateInput {
   title: String!
-  url: String
+  code: String
+  url: String @deprecated(reason: "Use urls")
+  urls: [String!]
   date: String
   details: String
-  rating: Int
+  photographer: String
+  # rating expressed as 1-100
+  rating100: Int
   organized: Boolean
   scene_ids: [ID!]
   studio_id: ID
@@ -47,24 +48,34 @@ input GalleryUpdateInput {
   clientMutationId: String
   id: ID!
   title: String
-  url: String
+  code: String
+  url: String @deprecated(reason: "Use urls")
+  urls: [String!]
   date: String
   details: String
-  rating: Int
+  photographer: String
+  # rating expressed as 1-100
+  rating100: Int
   organized: Boolean
   scene_ids: [ID!]
   studio_id: ID
   tag_ids: [ID!]
   performer_ids: [ID!]
+
+  primary_file_id: ID
 }
 
 input BulkGalleryUpdateInput {
   clientMutationId: String
   ids: [ID!]
-  url: String
+  code: String
+  url: String @deprecated(reason: "Use urls")
+  urls: BulkUpdateStrings
   date: String
   details: String
-  rating: Int
+  photographer: String
+  # rating expressed as 1-100
+  rating100: Int
   organized: Boolean
   scene_ids: BulkUpdateIds
   studio_id: ID
@@ -75,7 +86,7 @@ input BulkGalleryUpdateInput {
 input GalleryDestroyInput {
   ids: [ID!]!
   """
-  If true, then the zip file will be deleted if the gallery is zip-file-based. 
+  If true, then the zip file will be deleted if the gallery is zip-file-based.
   If gallery is folder-based, then any files not associated with other
   galleries will be deleted, along with the folder, if it is not empty.
   """

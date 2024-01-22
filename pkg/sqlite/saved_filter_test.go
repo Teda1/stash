@@ -4,6 +4,7 @@
 package sqlite_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stashapp/stash/pkg/models"
@@ -11,8 +12,8 @@ import (
 )
 
 func TestSavedFilterFind(t *testing.T) {
-	withTxn(func(r models.Repository) error {
-		savedFilter, err := r.SavedFilter().Find(savedFilterIDs[savedFilterIdxImage])
+	withTxn(func(ctx context.Context) error {
+		savedFilter, err := db.SavedFilter.Find(ctx, savedFilterIDs[savedFilterIdxImage])
 
 		if err != nil {
 			t.Errorf("Error finding saved filter: %s", err.Error())
@@ -25,8 +26,8 @@ func TestSavedFilterFind(t *testing.T) {
 }
 
 func TestSavedFilterFindByMode(t *testing.T) {
-	withTxn(func(r models.Repository) error {
-		savedFilters, err := r.SavedFilter().FindByMode(models.FilterModeScenes)
+	withTxn(func(ctx context.Context) error {
+		savedFilters, err := db.SavedFilter.FindByMode(ctx, models.FilterModeScenes)
 
 		if err != nil {
 			t.Errorf("Error finding saved filters: %s", err.Error())
@@ -41,33 +42,52 @@ func TestSavedFilterFindByMode(t *testing.T) {
 
 func TestSavedFilterDestroy(t *testing.T) {
 	const filterName = "filterToDestroy"
-	const testFilter = "{}"
+	filterQ := ""
+	filterPage := 1
+	filterPerPage := 40
+	filterSort := "date"
+	filterDirection := models.SortDirectionEnumAsc
+	findFilter := models.FindFilterType{
+		Q:         &filterQ,
+		Page:      &filterPage,
+		PerPage:   &filterPerPage,
+		Sort:      &filterSort,
+		Direction: &filterDirection,
+	}
+	objectFilter := map[string]interface{}{
+		"test": "foo",
+	}
+	uiOptions := map[string]interface{}{
+		"display_mode": 1,
+		"zoom_index":   1,
+	}
 	var id int
 
 	// create the saved filter to destroy
-	withTxn(func(r models.Repository) error {
-		created, err := r.SavedFilter().Create(models.SavedFilter{
-			Name:   filterName,
-			Mode:   models.FilterModeScenes,
-			Filter: testFilter,
-		})
+	withTxn(func(ctx context.Context) error {
+		newFilter := models.SavedFilter{
+			Name:         filterName,
+			Mode:         models.FilterModeScenes,
+			FindFilter:   &findFilter,
+			ObjectFilter: objectFilter,
+			UIOptions:    uiOptions,
+		}
+		err := db.SavedFilter.Create(ctx, &newFilter)
 
 		if err == nil {
-			id = created.ID
+			id = newFilter.ID
 		}
 
 		return err
 	})
 
-	withTxn(func(r models.Repository) error {
-		qb := r.SavedFilter()
-
-		return qb.Destroy(id)
+	withTxn(func(ctx context.Context) error {
+		return db.SavedFilter.Destroy(ctx, id)
 	})
 
 	// now try to find it
-	withTxn(func(r models.Repository) error {
-		found, err := r.SavedFilter().Find(id)
+	withTxn(func(ctx context.Context) error {
+		found, err := db.SavedFilter.Find(ctx, id)
 		if err == nil {
 			assert.Nil(t, found)
 		}
@@ -77,8 +97,8 @@ func TestSavedFilterDestroy(t *testing.T) {
 }
 
 func TestSavedFilterFindDefault(t *testing.T) {
-	withTxn(func(r models.Repository) error {
-		def, err := r.SavedFilter().FindDefault(models.FilterModeScenes)
+	withTxn(func(ctx context.Context) error {
+		def, err := db.SavedFilter.FindDefault(ctx, models.FilterModeScenes)
 		if err == nil {
 			assert.Equal(t, savedFilterIDs[savedFilterIdxDefaultScene], def.ID)
 		}
@@ -88,31 +108,51 @@ func TestSavedFilterFindDefault(t *testing.T) {
 }
 
 func TestSavedFilterSetDefault(t *testing.T) {
-	const newFilter = "foo"
+	filterQ := ""
+	filterPage := 1
+	filterPerPage := 40
+	filterSort := "date"
+	filterDirection := models.SortDirectionEnumAsc
+	findFilter := models.FindFilterType{
+		Q:         &filterQ,
+		Page:      &filterPage,
+		PerPage:   &filterPerPage,
+		Sort:      &filterSort,
+		Direction: &filterDirection,
+	}
+	objectFilter := map[string]interface{}{
+		"test": "foo",
+	}
+	uiOptions := map[string]interface{}{
+		"display_mode": 1,
+		"zoom_index":   1,
+	}
 
-	withTxn(func(r models.Repository) error {
-		_, err := r.SavedFilter().SetDefault(models.SavedFilter{
-			Mode:   models.FilterModeMovies,
-			Filter: newFilter,
+	withTxn(func(ctx context.Context) error {
+		err := db.SavedFilter.SetDefault(ctx, &models.SavedFilter{
+			Mode:         models.FilterModeMovies,
+			FindFilter:   &findFilter,
+			ObjectFilter: objectFilter,
+			UIOptions:    uiOptions,
 		})
 
 		return err
 	})
 
 	var defID int
-	withTxn(func(r models.Repository) error {
-		def, err := r.SavedFilter().FindDefault(models.FilterModeMovies)
+	withTxn(func(ctx context.Context) error {
+		def, err := db.SavedFilter.FindDefault(ctx, models.FilterModeMovies)
 		if err == nil {
 			defID = def.ID
-			assert.Equal(t, newFilter, def.Filter)
+			assert.Equal(t, &findFilter, def.FindFilter)
 		}
 
 		return err
 	})
 
 	// destroy it again
-	withTxn(func(r models.Repository) error {
-		return r.SavedFilter().Destroy(defID)
+	withTxn(func(ctx context.Context) error {
+		return db.SavedFilter.Destroy(ctx, defID)
 	})
 }
 

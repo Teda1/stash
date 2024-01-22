@@ -2,7 +2,7 @@ import React from "react";
 import { Card, Form } from "react-bootstrap";
 import { Link } from "react-router-dom";
 import cx from "classnames";
-import TruncatedText from "./TruncatedText";
+import { TruncatedText } from "./TruncatedText";
 
 interface ICardProps {
   className?: string;
@@ -10,7 +10,7 @@ interface ICardProps {
   thumbnailSectionClassName?: string;
   url: string;
   pretitleIcon?: JSX.Element;
-  title: string;
+  title: JSX.Element | string;
   image: JSX.Element;
   details?: JSX.Element;
   overlays?: JSX.Element;
@@ -18,6 +18,8 @@ interface ICardProps {
   selecting?: boolean;
   selected?: boolean;
   onSelectedChanged?: (selected: boolean, shiftKey: boolean) => void;
+  resumeTime?: number;
+  duration?: number;
   interactiveHeatmap?: string;
 }
 
@@ -70,7 +72,6 @@ export const GridCard: React.FC<ICardProps> = (props: ICardProps) => {
           checked={props.selected}
           onChange={() => props.onSelectedChanged!(!props.selected, shiftKey)}
           onClick={(event: React.MouseEvent<HTMLInputElement, MouseEvent>) => {
-            // eslint-disable-next-line prefer-destructuring
             shiftKey = event.shiftKey;
             event.stopPropagation();
           }}
@@ -83,10 +84,27 @@ export const GridCard: React.FC<ICardProps> = (props: ICardProps) => {
     if (props.interactiveHeatmap) {
       return (
         <img
+          loading="lazy"
           src={props.interactiveHeatmap}
           alt="interactive heatmap"
           className="interactive-heatmap"
         />
+      );
+    }
+  }
+
+  function maybeRenderProgressBar() {
+    if (
+      props.resumeTime &&
+      props.duration &&
+      props.duration > props.resumeTime
+    ) {
+      const percentValue = (100 / props.duration) * props.resumeTime;
+      const percentStr = percentValue + "%";
+      return (
+        <div title={Math.round(percentValue) + "%"} className="progress-bar">
+          <div style={{ width: percentStr }} className="progress-indicator" />
+        </div>
       );
     }
   }
@@ -110,6 +128,7 @@ export const GridCard: React.FC<ICardProps> = (props: ICardProps) => {
           {props.image}
         </Link>
         {props.overlays}
+        {maybeRenderProgressBar()}
       </div>
       {maybeRenderInteractiveHeatmap()}
       <div className="card-section">

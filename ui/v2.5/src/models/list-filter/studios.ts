@@ -3,9 +3,11 @@ import {
   createMandatoryNumberCriterionOption,
   createMandatoryStringCriterionOption,
   createStringCriterionOption,
+  createMandatoryTimestampCriterionOption,
 } from "./criteria/criterion";
 import { StudioIsMissingCriterionOption } from "./criteria/is-missing";
 import { RatingCriterionOption } from "./criteria/rating";
+import { StashIDCriterionOption } from "./criteria/stash-ids";
 import { ParentStudiosCriterionOption } from "./criteria/studios";
 import { ListFilterOptions } from "./filter-options";
 import { DisplayMode } from "./types";
@@ -28,7 +30,7 @@ const sortByOptions = ["name", "random", "rating"]
     },
   ]);
 
-const displayModeOptions = [DisplayMode.Grid];
+const displayModeOptions = [DisplayMode.Grid, DisplayMode.Tagger];
 const criterionOptions = [
   createMandatoryStringCriterionOption("name"),
   createStringCriterionOption("details"),
@@ -40,8 +42,10 @@ const criterionOptions = [
   createMandatoryNumberCriterionOption("image_count"),
   createMandatoryNumberCriterionOption("gallery_count"),
   createStringCriterionOption("url"),
-  createStringCriterionOption("stash_id"),
+  StashIDCriterionOption,
   createStringCriterionOption("aliases"),
+  createMandatoryTimestampCriterionOption("created_at"),
+  createMandatoryTimestampCriterionOption("updated_at"),
 ];
 
 export const StudioListFilterOptions = new ListFilterOptions(

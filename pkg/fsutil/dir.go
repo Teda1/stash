@@ -34,6 +34,27 @@ func IsPathInDir(dir, pathToCheck string) bool {
 	return false
 }
 
+// IsPathInDirs returns true if pathToCheck is within anys of the paths in dirs.
+func IsPathInDirs(dirs []string, pathToCheck string) bool {
+	for _, dir := range dirs {
+		if IsPathInDir(dir, pathToCheck) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// GetWorkingDirectory returns the current working directory.
+func GetWorkingDirectory() string {
+	ret, err := os.Getwd()
+	if err != nil {
+		// if we can't get cwd for whatever reason, just return "."
+		ret = "."
+	}
+	return ret
+}
+
 // GetHomeDirectory returns the path of the user's home directory.  ~ on Unix and C:\Users\UserName on Windows
 func GetHomeDirectory() string {
 	currentUser, err := user.Current()

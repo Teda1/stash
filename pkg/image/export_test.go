@@ -15,43 +15,25 @@ import (
 
 const (
 	imageID = 1
-	// noImageID  = 2
-	errImageID = 3
 
 	studioID        = 4
 	missingStudioID = 5
 	errStudioID     = 6
-
-	// noGalleryID  = 7
-	// errGalleryID = 8
-
-	// noTagsID  = 11
-	errTagsID = 12
-
-	// noMoviesID     = 13
-	// errMoviesID    = 14
-	// errFindMovieID = 15
-
-	// noMarkersID         = 16
-	// errMarkersID        = 17
-	// errFindPrimaryTagID = 18
-	// errFindByMarkerID   = 19
 )
 
-const (
-	checksum  = "checksum"
-	title     = "title"
-	rating    = 5
-	organized = true
-	ocounter  = 2
-	size      = 123
-	width     = 100
-	height    = 100
+var (
+	title      = "title"
+	rating     = 5
+	url        = "http://a.com"
+	date       = "2001-01-01"
+	dateObj, _ = models.ParseDate(date)
+	organized  = true
+	ocounter   = 2
 )
 
 const (
 	studioName = "studioName"
-	// galleryChecksum = "galleryChecksum"
+	path       = "path"
 )
 
 var (
@@ -61,36 +43,32 @@ var (
 
 func createFullImage(id int) models.Image {
 	return models.Image{
-		ID:        id,
-		Title:     models.NullString(title),
-		Checksum:  checksum,
-		Height:    models.NullInt64(height),
+		ID: id,
+		Files: models.NewRelatedFiles([]models.File{
+			&models.BaseFile{
+				Path: path,
+			},
+		}),
+		Title:     title,
 		OCounter:  ocounter,
-		Rating:    models.NullInt64(rating),
-		Size:      models.NullInt64(int64(size)),
+		Rating:    &rating,
+		Date:      &dateObj,
+		URLs:      models.NewRelatedStrings([]string{url}),
 		Organized: organized,
-		Width:     models.NullInt64(width),
-		CreatedAt: models.SQLiteTimestamp{
-			Timestamp: createTime,
-		},
-		UpdatedAt: models.SQLiteTimestamp{
-			Timestamp: updateTime,
-		},
+		CreatedAt: createTime,
+		UpdatedAt: updateTime,
 	}
 }
 
 func createFullJSONImage() *jsonschema.Image {
 	return &jsonschema.Image{
 		Title:     title,
-		Checksum:  checksum,
 		OCounter:  ocounter,
 		Rating:    rating,
+		Date:      date,
+		URLs:      []string{url},
 		Organized: organized,
-		File: &jsonschema.ImageFile{
-			Height: height,
-			Size:   size,
-			Width:  width,
-		},
+		Files:     []string{path},
 		CreatedAt: json.JSONTime{
 			Time: createTime,
 		},
@@ -123,7 +101,7 @@ func TestToJSON(t *testing.T) {
 
 func createStudioImage(studioID int) models.Image {
 	return models.Image{
-		StudioID: models.NullInt64(int64(studioID)),
+		StudioID: &studioID,
 	}
 }
 
@@ -152,19 +130,19 @@ var getStudioScenarios = []stringTestScenario{
 }
 
 func TestGetStudioName(t *testing.T) {
-	mockStudioReader := &mocks.StudioReaderWriter{}
+	db := mocks.NewDatabase()
 
 	studioErr := errors.New("error getting image")
 
-	mockStudioReader.On("Find", studioID).Return(&models.Studio{
-		Name: models.NullString(studioName),
+	db.Studio.On("Find", testCtx, studioID).Return(&models.Studio{
+		Name: studioName,
 	}, nil).Once()
-	mockStudioReader.On("Find", missingStudioID).Return(nil, nil).Once()
-	mockStudioReader.On("Find", errStudioID).Return(nil, studioErr).Once()
+	db.Studio.On("Find", testCtx, missingStudioID).Return(nil, nil).Once()
+	db.Studio.On("Find", testCtx, errStudioID).Return(nil, studioErr).Once()
 
 	for i, s := range getStudioScenarios {
 		image := s.input
-		json, err := GetStudioName(mockStudioReader, &image)
+		json, err := GetStudioName(testCtx, db.Studio, &image)
 
 		switch {
 		case !s.err && err != nil:
@@ -176,50 +154,5 @@ func TestGetStudioName(t *testing.T) {
 		}
 	}
 
-	mockStudioReader.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
-
-// var getGalleryChecksumScenarios = []stringTestScenario{
-// 	{
-// 		createEmptyImage(imageID),
-// 		galleryChecksum,
-// 		false,
-// 	},
-// 	{
-// 		createEmptyImage(noGalleryID),
-// 		"",
-// 		false,
-// 	},
-// 	{
-// 		createEmptyImage(errGalleryID),
-// 		"",
-// 		true,
-// 	},
-// }
-
-// func TestGetGalleryChecksum(t *testing.T) {
-// 	mockGalleryReader := &mocks.GalleryReaderWriter{}
-
-// 	galleryErr := errors.New("error getting gallery")
-
-// 	mockGalleryReader.On("FindByImageID", imageID).Return(&models.Gallery{
-// 		Checksum: galleryChecksum,
-// 	}, nil).Once()
-// 	mockGalleryReader.On("FindByImageID", noGalleryID).Return(nil, nil).Once()
-// 	mockGalleryReader.On("FindByImageID", errGalleryID).Return(nil, galleryErr).Once()
-
-// 	for i, s := range getGalleryChecksumScenarios {
-// 		image := s.input
-// 		json, err := GetGalleryChecksum(mockGalleryReader, &image)
-
-// 		if !s.err && err != nil {
-// 			t.Errorf("[%d] unexpected error: %s", i, err.Error())
-// 		} else if s.err && err == nil {
-// 			t.Errorf("[%d] expected error not returned", i)
-// 		} else {
-// 			assert.Equal(t, s.expected, json, "[%d]", i)
-// 		}
-// 	}
-
-// 	mockGalleryReader.AssertExpectations(t)
-// }

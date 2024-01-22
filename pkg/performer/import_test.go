@@ -1,11 +1,11 @@
 package performer
 
 import (
+	"context"
 	"errors"
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/stashapp/stash/pkg/hash/md5"
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/models/jsonschema"
 	"github.com/stashapp/stash/pkg/models/mocks"
@@ -29,6 +29,8 @@ const (
 	missingTagName  = "missingTagName"
 )
 
+var testCtx = context.Background()
+
 func TestImporterName(t *testing.T) {
 	i := Importer{
 		Input: jsonschema.Performer{
@@ -47,25 +49,25 @@ func TestImporterPreImport(t *testing.T) {
 		},
 	}
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 
 	assert.NotNil(t, err)
 
 	i.Input = *createFullJSONPerformer(performerName, image)
 
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 
 	assert.Nil(t, err)
 	expectedPerformer := *createFullPerformer(0, performerName)
-	expectedPerformer.Checksum = md5.FromString(performerName)
 	assert.Equal(t, expectedPerformer, i.performer)
 }
 
 func TestImporterPreImportWithTag(t *testing.T) {
-	tagReaderWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		TagWriter:           tagReaderWriter,
+		ReaderWriter:        db.Performer,
+		TagWriter:           db.Tag,
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 		Input: jsonschema.Performer{
 			Tags: []string{
@@ -74,30 +76,31 @@ func TestImporterPreImportWithTag(t *testing.T) {
 		},
 	}
 
-	tagReaderWriter.On("FindByNames", []string{existingTagName}, false).Return([]*models.Tag{
+	db.Tag.On("FindByNames", testCtx, []string{existingTagName}, false).Return([]*models.Tag{
 		{
 			ID:   existingTagID,
 			Name: existingTagName,
 		},
 	}, nil).Once()
-	tagReaderWriter.On("FindByNames", []string{existingTagErr}, false).Return(nil, errors.New("FindByNames error")).Once()
+	db.Tag.On("FindByNames", testCtx, []string{existingTagErr}, false).Return(nil, errors.New("FindByNames error")).Once()
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingTagID, i.tags[0].ID)
+	assert.Equal(t, existingTagID, i.performer.TagIDs.List()[0])
 
 	i.Input.Tags = []string{existingTagErr}
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
-	tagReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingTag(t *testing.T) {
-	tagReaderWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		TagWriter: tagReaderWriter,
+		ReaderWriter: db.Performer,
+		TagWriter:    db.Tag,
 		Input: jsonschema.Performer{
 			Tags: []string{
 				missingTagName,
@@ -106,31 +109,33 @@ func TestImporterPreImportWithMissingTag(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 	}
 
-	tagReaderWriter.On("FindByNames", []string{missingTagName}, false).Return(nil, nil).Times(3)
-	tagReaderWriter.On("Create", mock.AnythingOfType("models.Tag")).Return(&models.Tag{
-		ID: existingTagID,
-	}, nil)
+	db.Tag.On("FindByNames", testCtx, []string{missingTagName}, false).Return(nil, nil).Times(3)
+	db.Tag.On("Create", testCtx, mock.AnythingOfType("*models.Tag")).Run(func(args mock.Arguments) {
+		t := args.Get(1).(*models.Tag)
+		t.ID = existingTagID
+	}).Return(nil)
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumIgnore
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumCreate
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingTagID, i.tags[0].ID)
+	assert.Equal(t, existingTagID, i.performer.TagIDs.List()[0])
 
-	tagReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingTagCreateErr(t *testing.T) {
-	tagReaderWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		TagWriter: tagReaderWriter,
+		ReaderWriter: db.Performer,
+		TagWriter:    db.Tag,
 		Input: jsonschema.Performer{
 			Tags: []string{
 				missingTagName,
@@ -139,144 +144,139 @@ func TestImporterPreImportWithMissingTagCreateErr(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumCreate,
 	}
 
-	tagReaderWriter.On("FindByNames", []string{missingTagName}, false).Return(nil, nil).Once()
-	tagReaderWriter.On("Create", mock.AnythingOfType("models.Tag")).Return(nil, errors.New("Create error"))
+	db.Tag.On("FindByNames", testCtx, []string{missingTagName}, false).Return(nil, nil).Once()
+	db.Tag.On("Create", testCtx, mock.AnythingOfType("*models.Tag")).Return(errors.New("Create error"))
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
+
+	db.AssertExpectations(t)
 }
 
 func TestImporterPostImport(t *testing.T) {
-	readerWriter := &mocks.PerformerReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Performer,
+		TagWriter:    db.Tag,
 		imageData:    imageBytes,
 	}
 
 	updatePerformerImageErr := errors.New("UpdateImage error")
 
-	readerWriter.On("UpdateImage", performerID, imageBytes).Return(nil).Once()
-	readerWriter.On("UpdateImage", errImageID, imageBytes).Return(updatePerformerImageErr).Once()
+	db.Performer.On("UpdateImage", testCtx, performerID, imageBytes).Return(nil).Once()
+	db.Performer.On("UpdateImage", testCtx, errImageID, imageBytes).Return(updatePerformerImageErr).Once()
 
-	err := i.PostImport(performerID)
+	err := i.PostImport(testCtx, performerID)
 	assert.Nil(t, err)
 
-	err = i.PostImport(errImageID)
+	err = i.PostImport(testCtx, errImageID)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterFindExistingID(t *testing.T) {
-	readerWriter := &mocks.PerformerReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Performer,
+		TagWriter:    db.Tag,
 		Input: jsonschema.Performer{
 			Name: performerName,
 		},
 	}
 
+	pp := 1
+	findFilter := &models.FindFilterType{
+		PerPage: &pp,
+	}
+
+	performerFilter := func(name string) *models.PerformerFilterType {
+		return &models.PerformerFilterType{
+			Name: &models.StringCriterionInput{
+				Value:    name,
+				Modifier: models.CriterionModifierEquals,
+			},
+		}
+	}
+
 	errFindByNames := errors.New("FindByNames error")
-	readerWriter.On("FindByNames", []string{performerName}, false).Return(nil, nil).Once()
-	readerWriter.On("FindByNames", []string{existingPerformerName}, false).Return([]*models.Performer{
+	db.Performer.On("Query", testCtx, performerFilter(performerName), findFilter).Return(nil, 0, nil).Once()
+	db.Performer.On("Query", testCtx, performerFilter(existingPerformerName), findFilter).Return([]*models.Performer{
 		{
 			ID: existingPerformerID,
 		},
-	}, nil).Once()
-	readerWriter.On("FindByNames", []string{performerNameErr}, false).Return(nil, errFindByNames).Once()
+	}, 1, nil).Once()
+	db.Performer.On("Query", testCtx, performerFilter(performerNameErr), findFilter).Return(nil, 0, errFindByNames).Once()
 
-	id, err := i.FindExistingID()
+	id, err := i.FindExistingID(testCtx)
 	assert.Nil(t, id)
 	assert.Nil(t, err)
 
 	i.Input.Name = existingPerformerName
-	id, err = i.FindExistingID()
+	id, err = i.FindExistingID(testCtx)
 	assert.Equal(t, existingPerformerID, *id)
 	assert.Nil(t, err)
 
 	i.Input.Name = performerNameErr
-	id, err = i.FindExistingID()
+	id, err = i.FindExistingID(testCtx)
 	assert.Nil(t, id)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
-}
-
-func TestImporterPostImportUpdateTags(t *testing.T) {
-	readerWriter := &mocks.PerformerReaderWriter{}
-
-	i := Importer{
-		ReaderWriter: readerWriter,
-		tags: []*models.Tag{
-			{
-				ID: existingTagID,
-			},
-		},
-	}
-
-	updateErr := errors.New("UpdateTags error")
-
-	readerWriter.On("UpdateTags", performerID, []int{existingTagID}).Return(nil).Once()
-	readerWriter.On("UpdateTags", errTagsID, mock.AnythingOfType("[]int")).Return(updateErr).Once()
-
-	err := i.PostImport(performerID)
-	assert.Nil(t, err)
-
-	err = i.PostImport(errTagsID)
-	assert.NotNil(t, err)
-
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestCreate(t *testing.T) {
-	readerWriter := &mocks.PerformerReaderWriter{}
+	db := mocks.NewDatabase()
 
 	performer := models.Performer{
-		Name: models.NullString(performerName),
+		Name: performerName,
 	}
 
 	performerErr := models.Performer{
-		Name: models.NullString(performerNameErr),
+		Name: performerNameErr,
 	}
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Performer,
+		TagWriter:    db.Tag,
 		performer:    performer,
 	}
 
 	errCreate := errors.New("Create error")
-	readerWriter.On("Create", performer).Return(&models.Performer{
-		ID: performerID,
-	}, nil).Once()
-	readerWriter.On("Create", performerErr).Return(nil, errCreate).Once()
+	db.Performer.On("Create", testCtx, &performer).Run(func(args mock.Arguments) {
+		arg := args.Get(1).(*models.Performer)
+		arg.ID = performerID
+	}).Return(nil).Once()
+	db.Performer.On("Create", testCtx, &performerErr).Return(errCreate).Once()
 
-	id, err := i.Create()
+	id, err := i.Create(testCtx)
 	assert.Equal(t, performerID, *id)
 	assert.Nil(t, err)
 
 	i.performer = performerErr
-	id, err = i.Create()
+	id, err = i.Create(testCtx)
 	assert.Nil(t, id)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestUpdate(t *testing.T) {
-	readerWriter := &mocks.PerformerReaderWriter{}
+	db := mocks.NewDatabase()
 
 	performer := models.Performer{
-		Name: models.NullString(performerName),
+		Name: performerName,
 	}
 
 	performerErr := models.Performer{
-		Name: models.NullString(performerNameErr),
+		Name: performerNameErr,
 	}
 
 	i := Importer{
-		ReaderWriter: readerWriter,
+		ReaderWriter: db.Performer,
+		TagWriter:    db.Tag,
 		performer:    performer,
 	}
 
@@ -284,19 +284,19 @@ func TestUpdate(t *testing.T) {
 
 	// id needs to be set for the mock input
 	performer.ID = performerID
-	readerWriter.On("UpdateFull", performer).Return(nil, nil).Once()
+	db.Performer.On("Update", testCtx, &performer).Return(nil).Once()
 
-	err := i.Update(performerID)
+	err := i.Update(testCtx, performerID)
 	assert.Nil(t, err)
 
 	i.performer = performerErr
 
 	// need to set id separately
 	performerErr.ID = errImageID
-	readerWriter.On("UpdateFull", performerErr).Return(nil, errUpdate).Once()
+	db.Performer.On("Update", testCtx, &performerErr).Return(errUpdate).Once()
 
-	err = i.Update(errImageID)
+	err = i.Update(testCtx, errImageID)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }

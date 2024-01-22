@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
   Button,
   ButtonGroup,
@@ -15,13 +15,13 @@ import {
   useSaveFilter,
   useSetDefaultFilter,
 } from "src/core/StashService";
-import { useToast } from "src/hooks";
+import { useToast } from "src/hooks/Toast";
 import { ListFilterModel } from "src/models/list-filter/filter";
 import { SavedFilterDataFragment } from "src/core/generated-graphql";
-import { LoadingIndicator } from "src/components/Shared";
-import { PersistanceLevel } from "src/hooks/ListHook";
+import { PersistanceLevel } from "./ItemList";
 import { FormattedMessage, useIntl } from "react-intl";
-import { Icon } from "../Shared";
+import { Icon } from "../Shared/Icon";
+import { LoadingIndicator } from "../Shared/LoadingIndicator";
 import { faSave, faTimes } from "@fortawesome/free-solid-svg-icons";
 
 interface ISavedFilterListProps {
@@ -39,7 +39,6 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
   const intl = useIntl();
 
   const { data, error, loading, refetch } = useFindSavedFilters(filter.mode);
-  const oldError = useRef(error);
 
   const [filterName, setFilterName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -56,17 +55,8 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
 
   const savedFilters = data?.findSavedFilters ?? [];
 
-  useEffect(() => {
-    if (error && error !== oldError.current) {
-      Toast.error(error);
-    }
-
-    oldError.current = error;
-  }, [error, Toast, oldError]);
-
   async function onSaveFilter(name: string, id?: string) {
     const filterCopy = filter.clone();
-    filterCopy.currentPage = 1;
 
     try {
       setSaving(true);
@@ -76,21 +66,23 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
             id,
             mode: filter.mode,
             name,
-            filter: JSON.stringify(filterCopy.getSavedQueryParameters()),
+            find_filter: filterCopy.makeFindFilter(),
+            object_filter: filterCopy.makeSavedFindFilter(),
+            ui_options: filterCopy.makeUIOptions(),
           },
         },
       });
 
-      Toast.success({
-        content: intl.formatMessage(
+      Toast.success(
+        intl.formatMessage(
           {
             id: "toast.saved_entity",
           },
           {
             entity: intl.formatMessage({ id: "filter" }).toLocaleLowerCase(),
           }
-        ),
-      });
+        )
+      );
       setFilterName("");
       setOverwritingFilter(undefined);
       refetch();
@@ -113,8 +105,8 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
         },
       });
 
-      Toast.success({
-        content: intl.formatMessage(
+      Toast.success(
+        intl.formatMessage(
           {
             id: "toast.delete_past_tense",
           },
@@ -123,8 +115,8 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
             singularEntity: intl.formatMessage({ id: "filter" }),
             pluralEntity: intl.formatMessage({ id: "filters" }),
           }
-        ),
-      });
+        )
+      );
       refetch();
     } catch (err) {
       Toast.error(err);
@@ -136,7 +128,6 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
 
   async function onSetDefaultFilter() {
     const filterCopy = filter.clone();
-    filterCopy.currentPage = 1;
 
     try {
       setSaving(true);
@@ -145,16 +136,18 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
         variables: {
           input: {
             mode: filter.mode,
-            filter: JSON.stringify(filterCopy.getSavedQueryParameters()),
+            find_filter: filterCopy.makeFindFilter(),
+            object_filter: filterCopy.makeSavedFindFilter(),
+            ui_options: filterCopy.makeUIOptions(),
           },
         },
       });
 
-      Toast.success({
-        content: intl.formatMessage({
+      Toast.success(
+        intl.formatMessage({
           id: "toast.default_filter_set",
-        }),
-      });
+        })
+      );
     } catch (err) {
       Toast.error(err);
     } finally {
@@ -164,8 +157,11 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
 
   function filterClicked(f: SavedFilterDataFragment) {
     const newFilter = filter.clone();
+
     newFilter.currentPage = 1;
-    newFilter.configureFromQueryParameters(JSON.parse(f.filter));
+    // #1795 - reset search term if not present in saved filter
+    newFilter.searchTerm = "";
+    newFilter.configureFromSavedFilter(f);
     // #1507 - reset random seed when loaded
     newFilter.randomSeed = -1;
 
@@ -280,6 +276,8 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
   }
 
   function renderSavedFilters() {
+    if (error) return <h6 className="text-center">{error.message}</h6>;
+
     if (loading || saving) {
       return (
         <div className="loading">
@@ -306,20 +304,22 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
   function maybeRenderSetDefaultButton() {
     if (persistState === PersistanceLevel.ALL) {
       return (
-        <Button
-          className="set-as-default-button"
-          variant="secondary"
-          size="sm"
-          onClick={() => onSetDefaultFilter()}
-        >
-          {intl.formatMessage({ id: "actions.set_as_default" })}
-        </Button>
+        <div className="mt-1">
+          <Button
+            className="set-as-default-button"
+            variant="secondary"
+            size="sm"
+            onClick={() => onSetDefaultFilter()}
+          >
+            {intl.formatMessage({ id: "actions.set_as_default" })}
+          </Button>
+        </div>
       );
     }
   }
 
   return (
-    <div>
+    <>
       {maybeRenderDeleteAlert()}
       {maybeRenderOverwriteAlert()}
       <InputGroup>
@@ -354,6 +354,6 @@ export const SavedFilterList: React.FC<ISavedFilterListProps> = ({
       </InputGroup>
       {renderSavedFilters()}
       {maybeRenderSetDefaultButton()}
-    </div>
+    </>
   );
 };

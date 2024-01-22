@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"github.com/stashapp/stash/pkg/hash/videophash"
@@ -11,49 +10,46 @@ import (
 )
 
 type GeneratePhashTask struct {
-	Scene               models.Scene
+	repository          models.Repository
+	File                *models.VideoFile
 	Overwrite           bool
 	fileNamingAlgorithm models.HashAlgorithm
-	txnManager          models.TransactionManager
 }
 
 func (t *GeneratePhashTask) GetDescription() string {
-	return fmt.Sprintf("Generating phash for %s", t.Scene.Path)
+	return fmt.Sprintf("Generating phash for %s", t.File.Path)
 }
 
 func (t *GeneratePhashTask) Start(ctx context.Context) {
-	if !t.shouldGenerate() {
+	if !t.required() {
 		return
 	}
 
-	ffprobe := instance.FFProbe
-	videoFile, err := ffprobe.NewVideoFile(t.Scene.Path)
-	if err != nil {
-		logger.Errorf("error reading video file: %s", err.Error())
-		return
-	}
-
-	hash, err := videophash.Generate(instance.FFMPEG, videoFile)
+	hash, err := videophash.Generate(instance.FFMpeg, t.File)
 	if err != nil {
 		logger.Errorf("error generating phash: %s", err.Error())
 		logErrorOutput(err)
 		return
 	}
 
-	if err := t.txnManager.WithTxn(ctx, func(r models.Repository) error {
-		qb := r.Scene()
-		hashValue := sql.NullInt64{Int64: int64(*hash), Valid: true}
-		scenePartial := models.ScenePartial{
-			ID:    t.Scene.ID,
-			Phash: &hashValue,
-		}
-		_, err := qb.Update(scenePartial)
-		return err
-	}); err != nil {
-		logger.Error(err.Error())
+	r := t.repository
+	if err := r.WithTxn(ctx, func(ctx context.Context) error {
+		hashValue := int64(*hash)
+		t.File.Fingerprints = t.File.Fingerprints.AppendUnique(models.Fingerprint{
+			Type:        models.FingerprintTypePhash,
+			Fingerprint: hashValue,
+		})
+
+		return r.File.Update(ctx, t.File)
+	}); err != nil && ctx.Err() == nil {
+		logger.Errorf("Error setting phash: %v", err)
 	}
 }
 
-func (t *GeneratePhashTask) shouldGenerate() bool {
-	return t.Overwrite || !t.Scene.Phash.Valid
+func (t *GeneratePhashTask) required() bool {
+	if t.Overwrite {
+		return true
+	}
+
+	return t.File.Fingerprints.Get(models.FingerprintTypePhash) == nil
 }

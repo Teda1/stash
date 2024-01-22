@@ -2,6 +2,7 @@ package autotag
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -28,18 +29,28 @@ var testEndSeparators = []string{
 	",",
 }
 
+// asserts that got == expected
+// ignores expected.UpdatedAt, but ensures that got.UpdatedAt is set and not null
+func scenePartialsEqual(got, expected models.ScenePartial) bool {
+	// updated at should be set and not null
+	if !got.UpdatedAt.Set || got.UpdatedAt.Null {
+		return false
+	}
+	// else ignore the exact value
+	got.UpdatedAt = models.OptionalTime{}
+
+	return assert.ObjectsAreEqual(got, expected)
+}
+
 func generateNamePatterns(name, separator, ext string) []string {
 	var ret []string
 	ret = append(ret, fmt.Sprintf("%s%saaa.%s", name, separator, ext))
 	ret = append(ret, fmt.Sprintf("aaa%s%s.%s", separator, name, ext))
 	ret = append(ret, fmt.Sprintf("aaa%s%s%sbbb.%s", separator, name, separator, ext))
-	ret = append(ret, fmt.Sprintf("dir/%s%saaa.%s", name, separator, ext))
-	ret = append(ret, fmt.Sprintf("dir%sdir/%s%saaa.%s", separator, name, separator, ext))
-	ret = append(ret, fmt.Sprintf("dir\\%s%saaa.%s", name, separator, ext))
-	ret = append(ret, fmt.Sprintf("%s%saaa/dir/bbb.%s", name, separator, ext))
-	ret = append(ret, fmt.Sprintf("%s%saaa\\dir\\bbb.%s", name, separator, ext))
-	ret = append(ret, fmt.Sprintf("dir/%s%s/aaa.%s", name, separator, ext))
-	ret = append(ret, fmt.Sprintf("dir\\%s%s\\aaa.%s", name, separator, ext))
+	ret = append(ret, filepath.Join("dir", fmt.Sprintf("%s%saaa.%s", name, separator, ext)))
+	ret = append(ret, filepath.Join(fmt.Sprintf("dir%sdir", separator), fmt.Sprintf("%s%saaa.%s", name, separator, ext)))
+	ret = append(ret, filepath.Join(fmt.Sprintf("%s%saaa", name, separator), "dir", fmt.Sprintf("bbb.%s", ext)))
+	ret = append(ret, filepath.Join("dir", fmt.Sprintf("%s%s", name, separator), fmt.Sprintf("aaa.%s", ext)))
 
 	return ret
 }
@@ -90,8 +101,7 @@ func generateTestPaths(testName, ext string) (scenePatterns []string, falseScene
 	falseScenePatterns = append(falseScenePatterns, fmt.Sprintf("%saaa.%s", testName, ext))
 
 	// add path separator false scenarios
-	falseScenePatterns = append(falseScenePatterns, generateFalseNamePatterns(testName, "/", ext)...)
-	falseScenePatterns = append(falseScenePatterns, generateFalseNamePatterns(testName, "\\", ext)...)
+	falseScenePatterns = append(falseScenePatterns, generateFalseNamePatterns(testName, string(filepath.Separator), ext)...)
 
 	// split patterns only valid for ._- and whitespace
 	for _, separator := range testSeparators {
@@ -154,15 +164,17 @@ func TestScenePerformers(t *testing.T) {
 	const performerName = "performer name"
 	const performerID = 2
 	performer := models.Performer{
-		ID:   performerID,
-		Name: models.NullString(performerName),
+		ID:      performerID,
+		Name:    performerName,
+		Aliases: models.NewRelatedStrings([]string{}),
 	}
 
 	const reversedPerformerName = "name performer"
 	const reversedPerformerID = 3
 	reversedPerformer := models.Performer{
-		ID:   reversedPerformerID,
-		Name: models.NullString(reversedPerformerName),
+		ID:      reversedPerformerID,
+		Name:    reversedPerformerName,
+		Aliases: models.NewRelatedStrings([]string{}),
 	}
 
 	testTables := generateTestTable(performerName, sceneExt)
@@ -170,99 +182,109 @@ func TestScenePerformers(t *testing.T) {
 	assert := assert.New(t)
 
 	for _, test := range testTables {
-		mockPerformerReader := &mocks.PerformerReaderWriter{}
-		mockSceneReader := &mocks.SceneReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockPerformerReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockPerformerReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Performer{&performer, &reversedPerformer}, nil).Once()
-
-		if test.Matches {
-			mockSceneReader.On("GetPerformerIDs", sceneID).Return(nil, nil).Once()
-			mockSceneReader.On("UpdatePerformers", sceneID, []int{performerID}).Return(nil).Once()
-		}
+		db.Performer.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Performer.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Performer{&performer, &reversedPerformer}, nil).Once()
 
 		scene := models.Scene{
-			ID:   sceneID,
-			Path: test.Path,
+			ID:           sceneID,
+			Path:         test.Path,
+			PerformerIDs: models.NewRelatedIDs([]int{}),
 		}
-		err := ScenePerformers(&scene, mockSceneReader, mockPerformerReader, nil)
+
+		if test.Matches {
+			matchPartial := mock.MatchedBy(func(got models.ScenePartial) bool {
+				expected := models.ScenePartial{
+					PerformerIDs: &models.UpdateIDs{
+						IDs:  []int{performerID},
+						Mode: models.RelationshipUpdateModeAdd,
+					},
+				}
+
+				return scenePartialsEqual(got, expected)
+			})
+			db.Scene.On("UpdatePartial", testCtx, sceneID, matchPartial).Return(nil, nil).Once()
+		}
+
+		err := ScenePerformers(testCtx, &scene, db.Scene, db.Performer, nil)
 
 		assert.Nil(err)
-		mockPerformerReader.AssertExpectations(t)
-		mockSceneReader.AssertExpectations(t)
+		db.AssertExpectations(t)
 	}
 }
 
 func TestSceneStudios(t *testing.T) {
 	t.Parallel()
 
-	const sceneID = 1
-	const studioName = "studio name"
-	const studioID = 2
+	var (
+		sceneID    = 1
+		studioName = "studio name"
+		studioID   = 2
+	)
 	studio := models.Studio{
 		ID:   studioID,
-		Name: models.NullString(studioName),
+		Name: studioName,
 	}
 
 	const reversedStudioName = "name studio"
 	const reversedStudioID = 3
 	reversedStudio := models.Studio{
 		ID:   reversedStudioID,
-		Name: models.NullString(reversedStudioName),
+		Name: reversedStudioName,
 	}
 
 	testTables := generateTestTable(studioName, sceneExt)
 
 	assert := assert.New(t)
 
-	doTest := func(mockStudioReader *mocks.StudioReaderWriter, mockSceneReader *mocks.SceneReaderWriter, test pathTestTable) {
+	doTest := func(db *mocks.Database, test pathTestTable) {
 		if test.Matches {
-			mockSceneReader.On("Find", sceneID).Return(&models.Scene{}, nil).Once()
-			expectedStudioID := models.NullInt64(studioID)
-			mockSceneReader.On("Update", models.ScenePartial{
-				ID:       sceneID,
-				StudioID: &expectedStudioID,
-			}).Return(nil, nil).Once()
+			matchPartial := mock.MatchedBy(func(got models.ScenePartial) bool {
+				expected := models.ScenePartial{
+					StudioID: models.NewOptionalInt(studioID),
+				}
+
+				return scenePartialsEqual(got, expected)
+			})
+			db.Scene.On("UpdatePartial", testCtx, sceneID, matchPartial).Return(nil, nil).Once()
 		}
 
 		scene := models.Scene{
 			ID:   sceneID,
 			Path: test.Path,
 		}
-		err := SceneStudios(&scene, mockSceneReader, mockStudioReader, nil)
+		err := SceneStudios(testCtx, &scene, db.Scene, db.Studio, nil)
 
 		assert.Nil(err)
-		mockStudioReader.AssertExpectations(t)
-		mockSceneReader.AssertExpectations(t)
+		db.AssertExpectations(t)
 	}
 
 	for _, test := range testTables {
-		mockStudioReader := &mocks.StudioReaderWriter{}
-		mockSceneReader := &mocks.SceneReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockStudioReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockStudioReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
-		mockStudioReader.On("GetAliases", mock.Anything).Return([]string{}, nil).Maybe()
+		db.Studio.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Studio.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
+		db.Studio.On("GetAliases", testCtx, mock.Anything).Return([]string{}, nil).Maybe()
 
-		doTest(mockStudioReader, mockSceneReader, test)
+		doTest(db, test)
 	}
 
 	const unmatchedName = "unmatched"
-	studio.Name.String = unmatchedName
+	studio.Name = unmatchedName
 
 	// test against aliases
 	for _, test := range testTables {
-		mockStudioReader := &mocks.StudioReaderWriter{}
-		mockSceneReader := &mocks.SceneReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockStudioReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockStudioReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
-		mockStudioReader.On("GetAliases", studioID).Return([]string{
+		db.Studio.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Studio.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
+		db.Studio.On("GetAliases", testCtx, studioID).Return([]string{
 			studioName,
 		}, nil).Once()
-		mockStudioReader.On("GetAliases", reversedStudioID).Return([]string{}, nil).Once()
+		db.Studio.On("GetAliases", testCtx, reversedStudioID).Return([]string{}, nil).Once()
 
-		doTest(mockStudioReader, mockSceneReader, test)
+		doTest(db, test)
 	}
 }
 
@@ -288,32 +310,40 @@ func TestSceneTags(t *testing.T) {
 
 	assert := assert.New(t)
 
-	doTest := func(mockTagReader *mocks.TagReaderWriter, mockSceneReader *mocks.SceneReaderWriter, test pathTestTable) {
+	doTest := func(db *mocks.Database, test pathTestTable) {
 		if test.Matches {
-			mockSceneReader.On("GetTagIDs", sceneID).Return(nil, nil).Once()
-			mockSceneReader.On("UpdateTags", sceneID, []int{tagID}).Return(nil).Once()
+			matchPartial := mock.MatchedBy(func(got models.ScenePartial) bool {
+				expected := models.ScenePartial{
+					TagIDs: &models.UpdateIDs{
+						IDs:  []int{tagID},
+						Mode: models.RelationshipUpdateModeAdd,
+					},
+				}
+
+				return scenePartialsEqual(got, expected)
+			})
+			db.Scene.On("UpdatePartial", testCtx, sceneID, matchPartial).Return(nil, nil).Once()
 		}
 
 		scene := models.Scene{
-			ID:   sceneID,
-			Path: test.Path,
+			ID:     sceneID,
+			Path:   test.Path,
+			TagIDs: models.NewRelatedIDs([]int{}),
 		}
-		err := SceneTags(&scene, mockSceneReader, mockTagReader, nil)
+		err := SceneTags(testCtx, &scene, db.Scene, db.Tag, nil)
 
 		assert.Nil(err)
-		mockTagReader.AssertExpectations(t)
-		mockSceneReader.AssertExpectations(t)
+		db.AssertExpectations(t)
 	}
 
 	for _, test := range testTables {
-		mockTagReader := &mocks.TagReaderWriter{}
-		mockSceneReader := &mocks.SceneReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockTagReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockTagReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
-		mockTagReader.On("GetAliases", mock.Anything).Return([]string{}, nil).Maybe()
+		db.Tag.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Tag.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
+		db.Tag.On("GetAliases", testCtx, mock.Anything).Return([]string{}, nil).Maybe()
 
-		doTest(mockTagReader, mockSceneReader, test)
+		doTest(db, test)
 	}
 
 	const unmatchedName = "unmatched"
@@ -321,16 +351,15 @@ func TestSceneTags(t *testing.T) {
 
 	// test against aliases
 	for _, test := range testTables {
-		mockTagReader := &mocks.TagReaderWriter{}
-		mockSceneReader := &mocks.SceneReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockTagReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockTagReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
-		mockTagReader.On("GetAliases", tagID).Return([]string{
+		db.Tag.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Tag.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
+		db.Tag.On("GetAliases", testCtx, tagID).Return([]string{
 			tagName,
 		}, nil).Once()
-		mockTagReader.On("GetAliases", reversedTagID).Return([]string{}, nil).Once()
+		db.Tag.On("GetAliases", testCtx, reversedTagID).Return([]string{}, nil).Once()
 
-		doTest(mockTagReader, mockSceneReader, test)
+		doTest(db, test)
 	}
 }

@@ -1,6 +1,22 @@
+fragment ScrapedStudioData on ScrapedStudio {
+  stored_id
+  name
+  url
+  parent {
+    stored_id
+    name
+    url
+    image
+    remote_site_id
+  }
+  image
+  remote_site_id
+}
+
 fragment ScrapedPerformerData on ScrapedPerformer {
   stored_id
   name
+  disambiguation
   gender
   url
   twitter
@@ -12,6 +28,8 @@ fragment ScrapedPerformerData on ScrapedPerformer {
   height
   measurements
   fake_tits
+  penis_length
+  circumcised
   career_length
   tattoos
   piercings
@@ -30,6 +48,7 @@ fragment ScrapedPerformerData on ScrapedPerformer {
 fragment ScrapedScenePerformerData on ScrapedPerformer {
   stored_id
   name
+  disambiguation
   gender
   url
   twitter
@@ -41,6 +60,8 @@ fragment ScrapedScenePerformerData on ScrapedPerformer {
   height
   measurements
   fake_tits
+  penis_length
+  circumcised
   career_length
   tattoos
   piercings
@@ -89,12 +110,26 @@ fragment ScrapedSceneMovieData on ScrapedMovie {
   director
   url
   synopsis
+  front_image
+  back_image
+
+  studio {
+    ...ScrapedMovieStudioData
+  }
 }
 
 fragment ScrapedSceneStudioData on ScrapedStudio {
   stored_id
   name
   url
+  parent {
+    stored_id
+    name
+    url
+    image
+    remote_site_id
+  }
+  image
   remote_site_id
 }
 
@@ -105,8 +140,10 @@ fragment ScrapedSceneTagData on ScrapedTag {
 
 fragment ScrapedSceneData on ScrapedScene {
   title
+  code
   details
-  url
+  director
+  urls
   date
   image
   remote_site_id
@@ -147,8 +184,10 @@ fragment ScrapedSceneData on ScrapedScene {
 
 fragment ScrapedGalleryData on ScrapedGallery {
   title
+  code
   details
-  url
+  urls
+  photographer
   date
 
   studio {
@@ -166,7 +205,9 @@ fragment ScrapedGalleryData on ScrapedGallery {
 
 fragment ScrapedStashBoxSceneData on ScrapedScene {
   title
+  code
   details
+  director
   url
   date
   image

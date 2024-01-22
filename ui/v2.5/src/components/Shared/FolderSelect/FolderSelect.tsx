@@ -1,114 +1,134 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
-import { Button, InputGroup, Form } from "react-bootstrap";
-import debounce from "lodash-es/debounce";
-import Icon from "src/components/Shared/Icon";
-import LoadingIndicator from "src/components/Shared/LoadingIndicator";
-import { useDirectory } from "src/core/StashService";
-import { faTimes } from "@fortawesome/free-solid-svg-icons";
+import { Button, InputGroup, Form, Collapse } from "react-bootstrap";
+import { Icon } from "../Icon";
+import { LoadingIndicator } from "../LoadingIndicator";
+import { faEllipsis, faTimes } from "@fortawesome/free-solid-svg-icons";
+import { useDebounce } from "src/hooks/debounce";
+import TextUtils from "src/utils/text";
+import { useDirectoryPaths } from "./useDirectoryPaths";
 
 interface IProps {
   currentDirectory: string;
-  setCurrentDirectory: (value: string) => void;
+  onChangeDirectory: (value: string) => void;
   defaultDirectories?: string[];
   appendButton?: JSX.Element;
+  collapsible?: boolean;
+  quotePath?: boolean;
+  hideError?: boolean;
 }
 
 export const FolderSelect: React.FC<IProps> = ({
   currentDirectory,
-  setCurrentDirectory,
-  defaultDirectories,
+  onChangeDirectory,
+  defaultDirectories = [],
   appendButton,
+  collapsible = false,
+  quotePath = false,
+  hideError = false,
 }) => {
-  const [debouncedDirectory, setDebouncedDirectory] = useState(
-    currentDirectory
-  );
-  const { data, error, loading } = useDirectory(debouncedDirectory);
   const intl = useIntl();
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [path, setPath] = useState(currentDirectory);
 
-  const selectableDirectories: string[] = currentDirectory
-    ? data?.directory.directories ?? defaultDirectories ?? []
-    : defaultDirectories ?? [];
-
-  const debouncedSetDirectory = useMemo(
-    () =>
-      debounce((input: string) => {
-        setDebouncedDirectory(input);
-      }, 250),
-    []
+  const normalizedPath = quotePath ? TextUtils.stripQuotes(path) : path;
+  const { directories, parent, error, loading } = useDirectoryPaths(
+    normalizedPath,
+    hideError
   );
 
-  useEffect(() => {
-    if (currentDirectory === "" && !defaultDirectories && data?.directory.path)
-      setCurrentDirectory(data.directory.path);
-  }, [currentDirectory, setCurrentDirectory, data, defaultDirectories]);
+  const selectableDirectories =
+    (currentDirectory ? directories : defaultDirectories) ?? defaultDirectories;
+
+  const debouncedSetDirectory = useDebounce(setPath, 250);
 
   function setInstant(value: string) {
-    setCurrentDirectory(value);
-    setDebouncedDirectory(value);
+    const normalizedValue =
+      quotePath && value.includes(" ") ? TextUtils.addQuotes(value) : value;
+    onChangeDirectory(normalizedValue);
+    setPath(normalizedValue);
   }
 
   function setDebounced(value: string) {
-    setCurrentDirectory(value);
+    onChangeDirectory(value);
     debouncedSetDirectory(value);
   }
 
   function goUp() {
     if (defaultDirectories?.includes(currentDirectory)) {
       setInstant("");
-    } else if (data?.directory.parent) {
-      setInstant(data.directory.parent);
+    } else if (parent) {
+      setInstant(parent);
     }
   }
 
-  const topDirectory =
-    currentDirectory && data?.directory?.parent ? (
-      <li className="folder-list-parent folder-list-item">
-        <Button variant="link" onClick={() => goUp()}>
+  const topDirectory = currentDirectory && parent && (
+    <li className="folder-list-parent folder-list-item">
+      <Button variant="link" onClick={() => goUp()} disabled={loading}>
+        <span>
           <FormattedMessage id="setup.folder.up_dir" />
-        </Button>
-      </li>
-    ) : null;
+        </span>
+      </Button>
+    </li>
+  );
 
   return (
     <>
       <InputGroup>
         <Form.Control
+          className="btn-secondary"
           placeholder={intl.formatMessage({ id: "setup.folder.file_path" })}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+          onChange={(e) => {
             setDebounced(e.currentTarget.value);
           }}
           value={currentDirectory}
           spellCheck={false}
         />
-        {appendButton ? (
-          <InputGroup.Append>{appendButton}</InputGroup.Append>
-        ) : undefined}
-        {!data || !data.directory || loading ? (
+
+        {appendButton && <InputGroup.Append>{appendButton}</InputGroup.Append>}
+
+        {collapsible && (
+          <InputGroup.Append>
+            <Button
+              variant="secondary"
+              onClick={() => setShowBrowser(!showBrowser)}
+            >
+              <Icon icon={faEllipsis} />
+            </Button>
+          </InputGroup.Append>
+        )}
+
+        {(loading || error) && (
           <InputGroup.Append className="align-self-center">
             {loading ? (
               <LoadingIndicator inline small message="" />
             ) : (
-              <Icon icon={faTimes} color="red" className="ml-3" />
+              !hideError && <Icon icon={faTimes} color="red" className="ml-3" />
             )}
           </InputGroup.Append>
-        ) : undefined}
+        )}
       </InputGroup>
-      {error !== undefined && (
+
+      {!hideError && error !== undefined && (
         <h5 className="mt-4 text-break">Error: {error.message}</h5>
       )}
-      <ul className="folder-list">
-        {topDirectory}
-        {selectableDirectories.map((path) => {
-          return (
-            <li key={path} className="folder-list-item">
-              <Button variant="link" onClick={() => setInstant(path)}>
-                {path}
+
+      <Collapse in={!collapsible || showBrowser}>
+        <ul className="folder-list">
+          {topDirectory}
+          {selectableDirectories.map((dir) => (
+            <li key={dir} className="folder-list-item">
+              <Button
+                variant="link"
+                onClick={() => setInstant(dir)}
+                disabled={loading}
+              >
+                <span>{dir}</span>
               </Button>
             </li>
-          );
-        })}
-      </ul>
+          ))}
+        </ul>
+      </Collapse>
     </>
   );
 };

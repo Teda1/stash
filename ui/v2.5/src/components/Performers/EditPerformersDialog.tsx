@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Form, Col, Row } from "react-bootstrap";
+import { Col, Form, Row } from "react-bootstrap";
 import { FormattedMessage, useIntl } from "react-intl";
 import { useBulkPerformerUpdate } from "src/core/StashService";
 import * as GQL from "src/core/generated-graphql";
-import { Modal } from "src/components/Shared";
-import { useToast } from "src/hooks";
-import { FormUtils } from "src/utils";
-import MultiSet from "../Shared/MultiSet";
-import { RatingStars } from "../Scenes/SceneDetails/RatingStars";
+import { ModalComponent } from "../Shared/Modal";
+import { useToast } from "src/hooks/Toast";
+import { MultiSet } from "../Shared/MultiSet";
+import { RatingSystem } from "../Shared/Rating/RatingSystem";
 import {
   getAggregateInputValue,
   getAggregateState,
@@ -18,9 +17,15 @@ import {
   genderToString,
   stringToGender,
 } from "src/utils/gender";
+import {
+  circumcisedStrings,
+  circumcisedToString,
+  stringToCircumcised,
+} from "src/utils/circumcised";
 import { IndeterminateCheckbox } from "../Shared/IndeterminateCheckbox";
 import { BulkUpdateTextInput } from "../Shared/BulkUpdateTextInput";
 import { faPencilAlt } from "@fortawesome/free-solid-svg-icons";
+import * as FormUtils from "src/utils/form";
 
 interface IListOperationProps {
   selected: GQL.SlimPerformerDataFragment[];
@@ -29,10 +34,11 @@ interface IListOperationProps {
 
 const performerFields = [
   "favorite",
+  "disambiguation",
   "url",
   "instagram",
   "twitter",
-  "rating",
+  "rating100",
   "gender",
   "birthdate",
   "death_date",
@@ -40,10 +46,12 @@ const performerFields = [
   "country",
   "ethnicity",
   "eye_color",
-  "height",
+  // "height",
   // "weight",
   "measurements",
   "fake_tits",
+  "penis_length",
+  "circumcised",
   "hair_color",
   "tattoos",
   "piercings",
@@ -59,16 +67,17 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
     mode: GQL.BulkUpdateIdMode.Add,
   });
   const [existingTagIds, setExistingTagIds] = useState<string[]>();
-  const [
-    aggregateState,
-    setAggregateState,
-  ] = useState<GQL.BulkPerformerUpdateInput>({});
-  // weight needs conversion to/from number
+  const [aggregateState, setAggregateState] =
+    useState<GQL.BulkPerformerUpdateInput>({});
+  // height and weight needs conversion to/from number
+  const [height, setHeight] = useState<string | undefined>();
   const [weight, setWeight] = useState<string | undefined>();
+  const [penis_length, setPenisLength] = useState<string | undefined>();
   const [updateInput, setUpdateInput] = useState<GQL.BulkPerformerUpdateInput>(
     {}
   );
   const genderOptions = [""].concat(genderStrings);
+  const circumcisedOptions = [""].concat(circumcisedStrings);
 
   const [updatePerformers] = useBulkPerformerUpdate(getPerformerInput());
 
@@ -90,9 +99,9 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
 
     // we don't have unset functionality for the rating star control
     // so need to determine if we are setting a rating or not
-    performerInput.rating = getAggregateInputValue(
-      updateInput.rating,
-      aggregateState.rating
+    performerInput.rating100 = getAggregateInputValue(
+      updateInput.rating100,
+      aggregateState.rating100
     );
 
     // gender dropdown doesn't have unset functionality
@@ -101,9 +110,20 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
       updateInput.gender,
       aggregateState.gender
     );
+    performerInput.circumcised = getAggregateInputValue(
+      updateInput.circumcised,
+      aggregateState.circumcised
+    );
 
+    if (height !== undefined) {
+      performerInput.height_cm = parseFloat(height);
+    }
     if (weight !== undefined) {
       performerInput.weight = parseFloat(weight);
+    }
+
+    if (penis_length !== undefined) {
+      performerInput.penis_length = parseFloat(penis_length);
     }
 
     return performerInput;
@@ -113,16 +133,16 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
     setIsUpdating(true);
     try {
       await updatePerformers();
-      Toast.success({
-        content: intl.formatMessage(
+      Toast.success(
+        intl.formatMessage(
           { id: "toast.updated_entity" },
           {
             entity: intl
               .formatMessage({ id: "performers" })
               .toLocaleLowerCase(),
           }
-        ),
-      });
+        )
+      );
       props.onClose(true);
     } catch (e) {
       Toast.error(e);
@@ -135,7 +155,9 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
 
     const state = props.selected;
     let updateTagIds: string[] = [];
+    let updateHeight: string | undefined | null = undefined;
     let updateWeight: string | undefined | null = undefined;
+    let updatePenisLength: string | undefined | null = undefined;
     let first = true;
 
     state.forEach((performer: GQL.SlimPerformerDataFragment) => {
@@ -146,16 +168,33 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
       updateTagIds =
         getAggregateState(updateTagIds, performerTagIDs, first) ?? [];
 
+      const thisHeight =
+        performer.height_cm !== undefined && performer.height_cm !== null
+          ? performer.height_cm.toString()
+          : performer.height_cm;
+      updateHeight = getAggregateState(updateHeight, thisHeight, first);
+
       const thisWeight =
         performer.weight !== undefined && performer.weight !== null
           ? performer.weight.toString()
           : performer.weight;
       updateWeight = getAggregateState(updateWeight, thisWeight, first);
 
+      const thisPenisLength =
+        performer.penis_length !== undefined && performer.penis_length !== null
+          ? performer.penis_length.toString()
+          : performer.penis_length;
+      updatePenisLength = getAggregateState(
+        updatePenisLength,
+        thisPenisLength,
+        first
+      );
+
       first = false;
     });
 
     setExistingTagIds(updateTagIds);
+    setHeight(updateHeight);
     setWeight(updateWeight);
     setAggregateState(updateState);
     setUpdateInput(updateState);
@@ -182,7 +221,7 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
 
   function render() {
     return (
-      <Modal
+      <ModalComponent
         show
         icon={faPencilAlt}
         header={intl.formatMessage(
@@ -205,9 +244,11 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
             title: intl.formatMessage({ id: "rating" }),
           })}
           <Col xs={9}>
-            <RatingStars
-              value={updateInput.rating ?? undefined}
-              onSetRating={(value) => setUpdateField({ rating: value })}
+            <RatingSystem
+              value={updateInput.rating100}
+              onSetRating={(value) =>
+                setUpdateField({ rating100: value ?? undefined })
+              }
               disabled={isUpdating}
             />
           </Col>
@@ -228,7 +269,7 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
             <Form.Control
               as="select"
               className="input-control"
-              value={genderToString(updateInput.gender ?? undefined)}
+              value={genderToString(updateInput.gender)}
               onChange={(event) =>
                 setUpdateField({
                   gender: stringToGender(event.currentTarget.value),
@@ -243,6 +284,9 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
             </Form.Control>
           </Form.Group>
 
+          {renderTextField("disambiguation", updateInput.disambiguation, (v) =>
+            setUpdateField({ disambiguation: v })
+          )}
           {renderTextField("birthdate", updateInput.birthdate, (v) =>
             setUpdateField({ birthdate: v })
           )}
@@ -261,13 +305,37 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
           {renderTextField("eye_color", updateInput.eye_color, (v) =>
             setUpdateField({ eye_color: v })
           )}
-          {renderTextField("height", updateInput.height, (v) =>
-            setUpdateField({ height: v })
-          )}
+          {renderTextField("height", height, (v) => setHeight(v))}
           {renderTextField("weight", weight, (v) => setWeight(v))}
           {renderTextField("measurements", updateInput.measurements, (v) =>
             setUpdateField({ measurements: v })
           )}
+          {renderTextField("penis_length", penis_length, (v) =>
+            setPenisLength(v)
+          )}
+
+          <Form.Group>
+            <Form.Label>
+              <FormattedMessage id="circumcised" />
+            </Form.Label>
+            <Form.Control
+              as="select"
+              className="input-control"
+              value={circumcisedToString(updateInput.circumcised)}
+              onChange={(event) =>
+                setUpdateField({
+                  circumcised: stringToCircumcised(event.currentTarget.value),
+                })
+              }
+            >
+              {circumcisedOptions.map((opt) => (
+                <option value={opt} key={opt}>
+                  {opt}
+                </option>
+              ))}
+            </Form.Control>
+          </Form.Group>
+
           {renderTextField("fake_tits", updateInput.fake_tits, (v) =>
             setUpdateField({ fake_tits: v })
           )}
@@ -315,7 +383,7 @@ export const EditPerformersDialog: React.FC<IListOperationProps> = (
             />
           </Form.Group>
         </Form>
-      </Modal>
+      </ModalComponent>
     );
   }
 

@@ -7,31 +7,30 @@ import {
   queryScrapeMovieURL,
   useListMovieScrapers,
 } from "src/core/StashService";
-import {
-  LoadingIndicator,
-  StudioSelect,
-  DetailsEditNavbar,
-  DurationInput,
-  URLField,
-} from "src/components/Shared";
-import { useToast } from "src/hooks";
-import { Modal as BSModal, Form, Button, Col, Row } from "react-bootstrap";
-import { DurationUtils, FormUtils, ImageUtils } from "src/utils";
-import { RatingStars } from "src/components/Scenes/SceneDetails/RatingStars";
+import { LoadingIndicator } from "src/components/Shared/LoadingIndicator";
+import { StudioSelect } from "src/components/Shared/Select";
+import { DetailsEditNavbar } from "src/components/Shared/DetailsEditNavbar";
+import { URLField } from "src/components/Shared/URLField";
+import { useToast } from "src/hooks/Toast";
+import { Modal as BSModal, Form, Button } from "react-bootstrap";
+import TextUtils from "src/utils/text";
+import ImageUtils from "src/utils/image";
 import { useFormik } from "formik";
 import { Prompt } from "react-router-dom";
 import { MovieScrapeDialog } from "./MovieScrapeDialog";
+import isEqual from "lodash-es/isEqual";
+import { handleUnsavedChanges } from "src/utils/navigation";
+import { formikUtils } from "src/utils/form";
+import { yupDateString, yupFormikValidate } from "src/utils/yup";
 
 interface IMovieEditPanel {
-  movie?: Partial<GQL.MovieDataFragment>;
-  onSubmit: (
-    movie: Partial<GQL.MovieCreateInput | GQL.MovieUpdateInput>
-  ) => void;
+  movie: Partial<GQL.MovieDataFragment>;
+  onSubmit: (movie: GQL.MovieCreateInput) => Promise<void>;
   onCancel: () => void;
   onDelete: () => void;
   setFrontImage: (image?: string | null) => void;
   setBackImage: (image?: string | null) => void;
-  onImageEncoding: (loading?: boolean) => void;
+  setEncodingImage: (loading: boolean) => void;
 }
 
 export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
@@ -41,138 +40,71 @@ export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
   onDelete,
   setFrontImage,
   setBackImage,
-  onImageEncoding,
+  setEncodingImage,
 }) => {
   const intl = useIntl();
   const Toast = useToast();
 
-  const isNew = movie === undefined;
+  const isNew = movie.id === undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [isImageAlertOpen, setIsImageAlertOpen] = useState<boolean>(false);
 
-  const [imageClipboard, setImageClipboard] = useState<string | undefined>(
-    undefined
-  );
+  const [imageClipboard, setImageClipboard] = useState<string>();
 
   const Scrapers = useListMovieScrapers();
-  const [scrapedMovie, setScrapedMovie] = useState<
-    GQL.ScrapedMovie | undefined
-  >();
+  const [scrapedMovie, setScrapedMovie] = useState<GQL.ScrapedMovie>();
 
   const schema = yup.object({
     name: yup.string().required(),
-    aliases: yup.string().optional().nullable(),
-    duration: yup.string().optional().nullable(),
-    date: yup
-      .string()
-      .optional()
-      .nullable()
-      .matches(/^\d{4}-\d{2}-\d{2}$/),
-    rating: yup.number().optional().nullable(),
-    studio_id: yup.string().optional().nullable(),
-    director: yup.string().optional().nullable(),
-    synopsis: yup.string().optional().nullable(),
-    url: yup.string().optional().nullable(),
-    front_image: yup.string().optional().nullable(),
-    back_image: yup.string().optional().nullable(),
+    aliases: yup.string().ensure(),
+    duration: yup.number().integer().min(0).nullable().defined(),
+    date: yupDateString(intl),
+    studio_id: yup.string().required().nullable(),
+    director: yup.string().ensure(),
+    url: yup.string().ensure(),
+    synopsis: yup.string().ensure(),
+    front_image: yup.string().nullable().optional(),
+    back_image: yup.string().nullable().optional(),
   });
 
   const initialValues = {
-    name: movie?.name,
-    aliases: movie?.aliases,
-    duration: movie?.duration,
-    date: movie?.date,
-    rating: movie?.rating ?? null,
-    studio_id: movie?.studio?.id,
-    director: movie?.director,
-    synopsis: movie?.synopsis,
-    url: movie?.url,
-    front_image: undefined,
-    back_image: undefined,
+    name: movie?.name ?? "",
+    aliases: movie?.aliases ?? "",
+    duration: movie?.duration ?? null,
+    date: movie?.date ?? "",
+    studio_id: movie?.studio?.id ?? null,
+    director: movie?.director ?? "",
+    url: movie?.url ?? "",
+    synopsis: movie?.synopsis ?? "",
   };
 
-  type InputValues = typeof initialValues;
+  type InputValues = yup.InferType<typeof schema>;
 
-  const formik = useFormik({
+  const formik = useFormik<InputValues>({
     initialValues,
-    validationSchema: schema,
-    onSubmit: (values) => onSubmit(getMovieInput(values)),
+    enableReinitialize: true,
+    validate: yupFormikValidate(schema),
+    onSubmit: (values) => onSave(schema.cast(values)),
   });
-
-  const encodingImage = ImageUtils.usePasteImage(showImageAlert);
-
-  useEffect(() => {
-    setFrontImage(formik.values.front_image);
-  }, [formik.values.front_image, setFrontImage]);
-
-  useEffect(() => {
-    setBackImage(formik.values.back_image);
-  }, [formik.values.back_image, setBackImage]);
-
-  useEffect(() => onImageEncoding(encodingImage), [
-    onImageEncoding,
-    encodingImage,
-  ]);
-
-  function setRating(v: number) {
-    formik.setFieldValue("rating", v);
-  }
 
   // set up hotkeys
   useEffect(() => {
-    Mousetrap.bind("r 0", () => setRating(NaN));
-    Mousetrap.bind("r 1", () => setRating(1));
-    Mousetrap.bind("r 2", () => setRating(2));
-    Mousetrap.bind("r 3", () => setRating(3));
-    Mousetrap.bind("r 4", () => setRating(4));
-    Mousetrap.bind("r 5", () => setRating(5));
     // Mousetrap.bind("u", (e) => {
     //   setStudioFocus()
     //   e.preventDefault();
     // });
-    Mousetrap.bind("s s", () => formik.handleSubmit());
+    Mousetrap.bind("s s", () => {
+      if (formik.dirty) {
+        formik.submitForm();
+      }
+    });
 
     return () => {
-      Mousetrap.unbind("r 0");
-      Mousetrap.unbind("r 1");
-      Mousetrap.unbind("r 2");
-      Mousetrap.unbind("r 3");
-      Mousetrap.unbind("r 4");
-      Mousetrap.unbind("r 5");
       // Mousetrap.unbind("u");
       Mousetrap.unbind("s s");
     };
   });
-
-  function showImageAlert(imageData: string) {
-    setImageClipboard(imageData);
-    setIsImageAlertOpen(true);
-  }
-
-  function setImageFromClipboard(isFrontImage: boolean) {
-    if (isFrontImage) {
-      formik.setFieldValue("front_image", imageClipboard);
-    } else {
-      formik.setFieldValue("back_image", imageClipboard);
-    }
-
-    setImageClipboard(undefined);
-    setIsImageAlertOpen(false);
-  }
-
-  function getMovieInput(values: InputValues) {
-    const input: Partial<GQL.MovieCreateInput | GQL.MovieUpdateInput> = {
-      ...values,
-      rating: values.rating ?? null,
-      studio_id: values.studio_id ?? null,
-    };
-
-    if (movie && movie.id) {
-      (input as GQL.MovieUpdateInput).id = movie.id;
-    }
-    return input;
-  }
 
   function updateMovieEditStateFromScraper(
     state: Partial<GQL.ScrapedMovieDataFragment>
@@ -182,39 +114,53 @@ export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
     }
 
     if (state.aliases) {
-      formik.setFieldValue("aliases", state.aliases ?? undefined);
+      formik.setFieldValue("aliases", state.aliases);
     }
 
     if (state.duration) {
-      formik.setFieldValue(
-        "duration",
-        DurationUtils.stringToSeconds(state.duration) ?? undefined
-      );
+      const seconds = TextUtils.timestampToSeconds(state.duration);
+      if (seconds) {
+        formik.setFieldValue("duration", seconds);
+      }
     }
 
     if (state.date) {
-      formik.setFieldValue("date", state.date ?? undefined);
+      formik.setFieldValue("date", state.date);
     }
 
     if (state.studio && state.studio.stored_id) {
-      formik.setFieldValue("studio_id", state.studio.stored_id ?? undefined);
+      formik.setFieldValue("studio_id", state.studio.stored_id);
     }
 
     if (state.director) {
-      formik.setFieldValue("director", state.director ?? undefined);
+      formik.setFieldValue("director", state.director);
     }
     if (state.synopsis) {
-      formik.setFieldValue("synopsis", state.synopsis ?? undefined);
+      formik.setFieldValue("synopsis", state.synopsis);
     }
     if (state.url) {
-      formik.setFieldValue("url", state.url ?? undefined);
+      formik.setFieldValue("url", state.url);
     }
 
-    const imageStr = (state as GQL.ScrapedMovieDataFragment).front_image;
-    formik.setFieldValue("front_image", imageStr ?? undefined);
+    if (state.front_image) {
+      // image is a base64 string
+      formik.setFieldValue("front_image", state.front_image);
+    }
+    if (state.back_image) {
+      // image is a base64 string
+      formik.setFieldValue("back_image", state.back_image);
+    }
+  }
 
-    const backImageStr = (state as GQL.ScrapedMovieDataFragment).back_image;
-    formik.setFieldValue("back_image", backImageStr ?? undefined);
+  async function onSave(input: InputValues) {
+    setIsLoading(true);
+    try {
+      await onSubmit(input);
+      formik.resetForm();
+    } catch (e) {
+      Toast.error(e);
+    }
+    setIsLoading(false);
   }
 
   async function onScrapeMovieURL() {
@@ -244,7 +190,7 @@ export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
   function urlScrapable(scrapedUrl: string) {
     return (
       !!scrapedUrl &&
-      (Scrapers?.data?.listMovieScrapers ?? []).some((s) =>
+      (Scrapers?.data?.listScrapers ?? []).some((s) =>
         (s?.movie?.urls ?? []).some((u) => scrapedUrl.includes(u))
       )
     );
@@ -255,7 +201,10 @@ export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
       return;
     }
 
-    const currentMovie = getMovieInput(formik.values);
+    const currentMovie = {
+      id: movie.id!,
+      ...formik.values,
+    };
 
     // Get image paths for scrape gui
     currentMovie.front_image = movie?.front_image_path;
@@ -279,16 +228,50 @@ export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
     setScrapedMovie(undefined);
   }
 
+  const encodingImage = ImageUtils.usePasteImage(showImageAlert);
+
+  useEffect(() => {
+    setFrontImage(formik.values.front_image);
+  }, [formik.values.front_image, setFrontImage]);
+
+  useEffect(() => {
+    setBackImage(formik.values.back_image);
+  }, [formik.values.back_image, setBackImage]);
+
+  useEffect(() => {
+    setEncodingImage(encodingImage);
+  }, [setEncodingImage, encodingImage]);
+
+  function onFrontImageLoad(imageData: string | null) {
+    formik.setFieldValue("front_image", imageData);
+  }
+
   function onFrontImageChange(event: React.FormEvent<HTMLInputElement>) {
-    ImageUtils.onImageChange(event, (data) =>
-      formik.setFieldValue("front_image", data)
-    );
+    ImageUtils.onImageChange(event, onFrontImageLoad);
+  }
+
+  function onBackImageLoad(imageData: string | null) {
+    formik.setFieldValue("back_image", imageData);
   }
 
   function onBackImageChange(event: React.FormEvent<HTMLInputElement>) {
-    ImageUtils.onImageChange(event, (data) =>
-      formik.setFieldValue("back_image", data)
-    );
+    ImageUtils.onImageChange(event, onBackImageLoad);
+  }
+
+  function showImageAlert(imageData: string) {
+    setImageClipboard(imageData);
+    setIsImageAlertOpen(true);
+  }
+
+  function setImageFromClipboard(isFrontImage: boolean) {
+    if (isFrontImage) {
+      formik.setFieldValue("front_image", imageClipboard);
+    } else {
+      formik.setFieldValue("back_image", imageClipboard);
+    }
+
+    setImageClipboard(undefined);
+    setIsImageAlertOpen(false);
   }
 
   function renderImageAlert() {
@@ -330,24 +313,41 @@ export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
 
   if (isLoading) return <LoadingIndicator />;
 
-  const isEditing = true;
+  const {
+    renderField,
+    renderInputField,
+    renderDateField,
+    renderDurationField,
+  } = formikUtils(intl, formik);
 
-  function renderTextField(field: string, title: string) {
-    return (
-      <Form.Group controlId={field} as={Row}>
-        {FormUtils.renderLabel({
-          title,
-        })}
-        <Col xs={9}>
-          <Form.Control
-            className="text-input"
-            placeholder={title}
-            {...formik.getFieldProps(field)}
-            isInvalid={!!formik.getFieldMeta(field).error}
-          />
-        </Col>
-      </Form.Group>
+  function renderStudioField() {
+    const title = intl.formatMessage({ id: "studio" });
+    const control = (
+      <StudioSelect
+        onSelect={(items) =>
+          formik.setFieldValue(
+            "studio_id",
+            items.length > 0 ? items[0]?.id : null
+          )
+        }
+        ids={formik.values.studio_id ? [formik.values.studio_id] : []}
+      />
     );
+
+    return renderField("studio_id", title, control);
+  }
+
+  function renderUrlField() {
+    const title = intl.formatMessage({ id: "url" });
+    const control = (
+      <URLField
+        {...formik.getFieldProps("url")}
+        onScrapeClick={onScrapeMovieURL}
+        urlScrapable={urlScrapable}
+      />
+    );
+
+    return renderField("url", title, control);
   }
 
   // TODO: CSS class
@@ -368,124 +368,36 @@ export const MovieEditPanel: React.FC<IMovieEditPanel> = ({
           // Check if it's a redirect after movie creation
           if (action === "PUSH" && location.pathname.startsWith("/movies/"))
             return true;
-          return intl.formatMessage({ id: "dialogs.unsaved_changes" });
+
+          return handleUnsavedChanges(intl, "movies", movie.id)(location);
         }}
       />
 
       <Form noValidate onSubmit={formik.handleSubmit} id="movie-edit">
-        <Form.Group controlId="name" as={Row}>
-          {FormUtils.renderLabel({
-            title: intl.formatMessage({ id: "name" }),
-          })}
-          <Col xs={9}>
-            <Form.Control
-              className="text-input"
-              placeholder={intl.formatMessage({ id: "name" })}
-              {...formik.getFieldProps("name")}
-              isInvalid={!!formik.errors.name}
-            />
-            <Form.Control.Feedback type="invalid">
-              {formik.errors.name}
-            </Form.Control.Feedback>
-          </Col>
-        </Form.Group>
-
-        {renderTextField("aliases", intl.formatMessage({ id: "aliases" }))}
-
-        <Form.Group controlId="duration" as={Row}>
-          {FormUtils.renderLabel({
-            title: intl.formatMessage({ id: "duration" }),
-          })}
-          <Col xs={9}>
-            <DurationInput
-              numericValue={formik.values.duration ?? undefined}
-              onValueChange={(valueAsNumber: number) => {
-                formik.setFieldValue("duration", valueAsNumber);
-              }}
-            />
-          </Col>
-        </Form.Group>
-
-        {renderTextField("date", intl.formatMessage({ id: "date" }))}
-
-        <Form.Group controlId="studio" as={Row}>
-          {FormUtils.renderLabel({
-            title: intl.formatMessage({ id: "studio" }),
-          })}
-          <Col xs={9}>
-            <StudioSelect
-              onSelect={(items) =>
-                formik.setFieldValue(
-                  "studio_id",
-                  items.length > 0 ? items[0]?.id : undefined
-                )
-              }
-              ids={formik.values.studio_id ? [formik.values.studio_id] : []}
-            />
-          </Col>
-        </Form.Group>
-
-        {renderTextField("director", intl.formatMessage({ id: "director" }))}
-
-        <Form.Group controlId="rating" as={Row}>
-          {FormUtils.renderLabel({
-            title: intl.formatMessage({ id: "rating" }),
-          })}
-          <Col xs={9}>
-            <RatingStars
-              value={formik.values.rating ?? undefined}
-              onSetRating={(value) =>
-                formik.setFieldValue("rating", value ?? null)
-              }
-            />
-          </Col>
-        </Form.Group>
-
-        <Form.Group controlId="url" as={Row}>
-          {FormUtils.renderLabel({
-            title: intl.formatMessage({ id: "url" }),
-          })}
-          <Col xs={9}>
-            <URLField
-              {...formik.getFieldProps("url")}
-              onScrapeClick={onScrapeMovieURL}
-              urlScrapable={urlScrapable}
-            />
-          </Col>
-        </Form.Group>
-
-        <Form.Group controlId="synopsis" as={Row}>
-          {FormUtils.renderLabel({
-            title: intl.formatMessage({ id: "synopsis" }),
-          })}
-          <Col xs={9}>
-            <Form.Control
-              as="textarea"
-              className="text-input"
-              placeholder={intl.formatMessage({ id: "synopsis" })}
-              {...formik.getFieldProps("synopsis")}
-            />
-          </Col>
-        </Form.Group>
+        {renderInputField("name")}
+        {renderInputField("aliases")}
+        {renderDurationField("duration")}
+        {renderDateField("date")}
+        {renderStudioField()}
+        {renderInputField("director")}
+        {renderUrlField()}
+        {renderInputField("synopsis", "textarea")}
       </Form>
 
       <DetailsEditNavbar
         objectName={movie?.name ?? intl.formatMessage({ id: "movie" })}
         isNew={isNew}
-        isEditing={isEditing}
+        classNames="col-xl-9 mt-3"
+        isEditing
         onToggleEdit={onCancel}
-        onSave={() => formik.handleSubmit()}
-        saveDisabled={!formik.dirty}
+        onSave={formik.handleSubmit}
+        saveDisabled={(!isNew && !formik.dirty) || !isEqual(formik.errors, {})}
         onImageChange={onFrontImageChange}
-        onImageChangeURL={(i) => formik.setFieldValue("front_image", i)}
-        onClearImage={() => {
-          formik.setFieldValue("front_image", null);
-        }}
+        onImageChangeURL={onFrontImageLoad}
+        onClearImage={() => onFrontImageLoad(null)}
         onBackImageChange={onBackImageChange}
-        onBackImageChangeURL={(i) => formik.setFieldValue("back_image", i)}
-        onClearBackImage={() => {
-          formik.setFieldValue("back_image", null);
-        }}
+        onBackImageChangeURL={onBackImageLoad}
+        onClearBackImage={() => onBackImageLoad(null)}
         onDelete={onDelete}
       />
 

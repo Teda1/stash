@@ -1,18 +1,22 @@
 type Image {
   id: ID!
-  checksum: String
   title: String
-  rating: Int
+  code: String
+  # rating expressed as 1-100
+  rating100: Int
+  url: String @deprecated(reason: "Use urls")
+  urls: [String!]!
+  date: String
+  details: String
+  photographer: String
   o_counter: Int
   organized: Boolean!
-  path: String!
   created_at: Time!
   updated_at: Time!
-  file_mod_time: Time
 
-  file: ImageFileType! # Resolver
+  files: [ImageFile!]! @deprecated(reason: "Use visual_files")
+  visual_files: [VisualFile!]!
   paths: ImagePathsType! # Resolver
-
   galleries: [Gallery!]!
   studio: Studio
   tags: [Tag!]!
@@ -20,13 +24,15 @@ type Image {
 }
 
 type ImageFileType {
-  size: Int
-  width: Int
-  height: Int
+  mod_time: Time!
+  size: Int!
+  width: Int!
+  height: Int!
 }
 
 type ImagePathsType {
   thumbnail: String # Resolver
+  preview: String # Resolver
   image: String # Resolver
 }
 
@@ -34,22 +40,38 @@ input ImageUpdateInput {
   clientMutationId: String
   id: ID!
   title: String
-  rating: Int
+  code: String
+  # rating expressed as 1-100
+  rating100: Int
   organized: Boolean
-  
+  url: String @deprecated(reason: "Use urls")
+  urls: [String!]
+  date: String
+  details: String
+  photographer: String
+
   studio_id: ID
   performer_ids: [ID!]
   tag_ids: [ID!]
   gallery_ids: [ID!]
+
+  primary_file_id: ID
 }
 
 input BulkImageUpdateInput {
   clientMutationId: String
   ids: [ID!]
   title: String
-  rating: Int
+  code: String
+  # rating expressed as 1-100
+  rating100: Int
   organized: Boolean
-  
+  url: String @deprecated(reason: "Use urls")
+  urls: BulkUpdateStrings
+  date: String
+  details: String
+  photographer: String
+
   studio_id: ID
   performer_ids: BulkUpdateIds
   tag_ids: BulkUpdateIds
@@ -70,9 +92,9 @@ input ImagesDestroyInput {
 
 type FindImagesResultType {
   count: Int!
-  """Total megapixels of the images"""
+  "Total megapixels of the images"
   megapixels: Float!
-  """Total file size in bytes"""
+  "Total file size in bytes"
   filesize: Float!
   images: [Image!]!
 }

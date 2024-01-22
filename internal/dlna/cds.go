@@ -40,7 +40,7 @@ import (
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/scene"
-	"github.com/stashapp/stash/pkg/sliceutil/stringslice"
+	"github.com/stashapp/stash/pkg/sliceutil"
 )
 
 var pageSize = 100
@@ -56,7 +56,6 @@ type browse struct {
 type contentDirectoryService struct {
 	*Server
 	upnp.Eventing
-	txnManager models.TransactionManager
 }
 
 func formatDurationSexagesimal(d time.Duration) string {
@@ -108,9 +107,18 @@ func sceneToContainer(scene *models.Scene, parent string, host string) interface
 	}
 
 	mimeType := "video/mp4"
-	size, _ := strconv.Atoi(scene.Size.String)
+	var (
+		size     int
+		bitrate  uint
+		duration int64
+	)
 
-	duration := int64(scene.Duration.Float64)
+	f := scene.Files.Primary()
+	if f != nil {
+		size = int(f.Size)
+		bitrate = uint(f.BitRate)
+		duration = int64(f.Duration)
+	}
 
 	item.Res = append(item.Res, upnpav.Resource{
 		URL: (&url.URL{
@@ -124,8 +132,7 @@ func sceneToContainer(scene *models.Scene, parent string, host string) interface
 		ProtocolInfo: fmt.Sprintf("http-get:*:%s:%s", mimeType, dlna.ContentFeatures{
 			SupportRange: true,
 		}.String()),
-		Bitrate: uint(scene.Bitrate.Int64),
-		// TODO - make %d:%02d:%02d string
+		Bitrate:  bitrate,
 		Duration: formatDurationSexagesimal(time.Duration(duration) * time.Second),
 		Size:     uint64(size),
 		// Resolution: resolution,
@@ -352,8 +359,13 @@ func (me *contentDirectoryService) handleBrowseMetadata(obj object, host string)
 	} else {
 		var scene *models.Scene
 
-		if err := me.txnManager.WithReadTxn(context.TODO(), func(r models.ReaderRepository) error {
-			scene, err = r.Scene().Find(sceneID)
+		r := me.repository
+		if err := r.WithReadTxn(context.TODO(), func(ctx context.Context) error {
+			scene, err = r.SceneFinder.Find(ctx, sceneID)
+			if scene != nil {
+				err = scene.LoadPrimaryFile(ctx, r.FileGetter)
+			}
+
 			if err != nil {
 				return err
 			}
@@ -370,7 +382,7 @@ func (me *contentDirectoryService) handleBrowseMetadata(obj object, host string)
 			// http://upnp.org/specs/av/UPnP-av-ContentDirectory-v1-Service.pdf
 			// maximum update ID is 2**32, then rolls back to 0
 			const maxUpdateID int64 = 1 << 32
-			updateID = fmt.Sprint(scene.UpdatedAt.Timestamp.Unix() % maxUpdateID)
+			updateID = fmt.Sprint(scene.UpdatedAt.Unix() % maxUpdateID)
 		} else {
 			return nil, upnp.Errorf(upnpav.NoSuchObjectErrorCode, "scene not found")
 		}
@@ -428,17 +440,29 @@ func getRootObjects() []interface{} {
 	return objs
 }
 
+func getSortDirection(sceneFilter *models.SceneFilterType, sort string) models.SortDirectionEnum {
+	direction := models.SortDirectionEnumDesc
+	if sort == "title" {
+		direction = models.SortDirectionEnumAsc
+	}
+
+	return direction
+}
+
 func (me *contentDirectoryService) getVideos(sceneFilter *models.SceneFilterType, parentID string, host string) []interface{} {
 	var objs []interface{}
 
-	if err := me.txnManager.WithReadTxn(context.TODO(), func(r models.ReaderRepository) error {
-		sort := "title"
+	r := me.repository
+	if err := r.WithReadTxn(context.TODO(), func(ctx context.Context) error {
+		sort := me.VideoSortOrder
+		direction := getSortDirection(sceneFilter, sort)
 		findFilter := &models.FindFilterType{
-			PerPage: &pageSize,
-			Sort:    &sort,
+			PerPage:   &pageSize,
+			Sort:      &sort,
+			Direction: &direction,
 		}
 
-		scenes, total, err := scene.QueryWithCount(r.Scene(), sceneFilter, findFilter)
+		scenes, total, err := scene.QueryWithCount(ctx, r.SceneFinder, sceneFilter, findFilter)
 		if err != nil {
 			return err
 		}
@@ -449,12 +473,16 @@ func (me *contentDirectoryService) getVideos(sceneFilter *models.SceneFilterType
 				parentID:    parentID,
 			}
 
-			objs, err = pager.getPages(r, total)
+			objs, err = pager.getPages(ctx, r.SceneFinder, total)
 			if err != nil {
 				return err
 			}
 		} else {
 			for _, s := range scenes {
+				if err := s.LoadPrimaryFile(ctx, r.FileGetter); err != nil {
+					return err
+				}
+
 				objs = append(objs, sceneToContainer(s, parentID, host))
 			}
 		}
@@ -470,14 +498,17 @@ func (me *contentDirectoryService) getVideos(sceneFilter *models.SceneFilterType
 func (me *contentDirectoryService) getPageVideos(sceneFilter *models.SceneFilterType, parentID string, page int, host string) []interface{} {
 	var objs []interface{}
 
-	if err := me.txnManager.WithReadTxn(context.TODO(), func(r models.ReaderRepository) error {
+	r := me.repository
+	if err := r.WithReadTxn(context.TODO(), func(ctx context.Context) error {
 		pager := scenePager{
 			sceneFilter: sceneFilter,
 			parentID:    parentID,
 		}
 
+		sort := me.VideoSortOrder
+		direction := getSortDirection(sceneFilter, sort)
 		var err error
-		objs, err = pager.getPageVideos(r, page, host)
+		objs, err = pager.getPageVideos(ctx, r.SceneFinder, r.FileGetter, page, host, sort, direction)
 		if err != nil {
 			return err
 		}
@@ -491,7 +522,7 @@ func (me *contentDirectoryService) getPageVideos(sceneFilter *models.SceneFilter
 }
 
 func getPageFromID(paths []string) *int {
-	i := stringslice.StrIndex(paths, "page")
+	i := sliceutil.Index(paths, "page")
 	if i == -1 || i+1 >= len(paths) {
 		return nil
 	}
@@ -511,14 +542,15 @@ func (me *contentDirectoryService) getAllScenes(host string) []interface{} {
 func (me *contentDirectoryService) getStudios() []interface{} {
 	var objs []interface{}
 
-	if err := me.txnManager.WithReadTxn(context.TODO(), func(r models.ReaderRepository) error {
-		studios, err := r.Studio().All()
+	r := me.repository
+	if err := r.WithReadTxn(context.TODO(), func(ctx context.Context) error {
+		studios, err := r.StudioFinder.All(ctx)
 		if err != nil {
 			return err
 		}
 
 		for _, s := range studios {
-			objs = append(objs, makeStorageFolder("studios/"+strconv.Itoa(s.ID), s.Name.String, "studios"))
+			objs = append(objs, makeStorageFolder("studios/"+strconv.Itoa(s.ID), s.Name, "studios"))
 		}
 
 		return nil
@@ -550,8 +582,9 @@ func (me *contentDirectoryService) getStudioScenes(paths []string, host string) 
 func (me *contentDirectoryService) getTags() []interface{} {
 	var objs []interface{}
 
-	if err := me.txnManager.WithReadTxn(context.TODO(), func(r models.ReaderRepository) error {
-		tags, err := r.Tag().All()
+	r := me.repository
+	if err := r.WithReadTxn(context.TODO(), func(ctx context.Context) error {
+		tags, err := r.TagFinder.All(ctx)
 		if err != nil {
 			return err
 		}
@@ -589,14 +622,15 @@ func (me *contentDirectoryService) getTagScenes(paths []string, host string) []i
 func (me *contentDirectoryService) getPerformers() []interface{} {
 	var objs []interface{}
 
-	if err := me.txnManager.WithReadTxn(context.TODO(), func(r models.ReaderRepository) error {
-		performers, err := r.Performer().All()
+	r := me.repository
+	if err := r.WithReadTxn(context.TODO(), func(ctx context.Context) error {
+		performers, err := r.PerformerFinder.All(ctx)
 		if err != nil {
 			return err
 		}
 
 		for _, s := range performers {
-			objs = append(objs, makeStorageFolder("performers/"+strconv.Itoa(s.ID), s.Name.String, "performers"))
+			objs = append(objs, makeStorageFolder("performers/"+strconv.Itoa(s.ID), s.Name, "performers"))
 		}
 
 		return nil
@@ -628,14 +662,15 @@ func (me *contentDirectoryService) getPerformerScenes(paths []string, host strin
 func (me *contentDirectoryService) getMovies() []interface{} {
 	var objs []interface{}
 
-	if err := me.txnManager.WithReadTxn(context.TODO(), func(r models.ReaderRepository) error {
-		movies, err := r.Movie().All()
+	r := me.repository
+	if err := r.WithReadTxn(context.TODO(), func(ctx context.Context) error {
+		movies, err := r.MovieFinder.All(ctx)
 		if err != nil {
 			return err
 		}
 
 		for _, s := range movies {
-			objs = append(objs, makeStorageFolder("movies/"+strconv.Itoa(s.ID), s.Name.String, "movies"))
+			objs = append(objs, makeStorageFolder("movies/"+strconv.Itoa(s.ID), s.Name, "movies"))
 		}
 
 		return nil
@@ -682,9 +717,9 @@ func (me *contentDirectoryService) getRatingScenes(paths []string, host string) 
 	}
 
 	sceneFilter := &models.SceneFilterType{
-		Rating: &models.IntCriterionInput{
+		Rating100: &models.IntCriterionInput{
 			Modifier: models.CriterionModifierEquals,
-			Value:    r,
+			Value:    models.Rating5To100(r),
 		},
 	}
 

@@ -1,6 +1,8 @@
 package image
 
 import (
+	"context"
+
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/models/json"
 	"github.com/stashapp/stash/pkg/models/jsonschema"
@@ -11,60 +13,44 @@ import (
 // of cover image.
 func ToBasicJSON(image *models.Image) *jsonschema.Image {
 	newImageJSON := jsonschema.Image{
-		Checksum:  image.Checksum,
-		CreatedAt: json.JSONTime{Time: image.CreatedAt.Timestamp},
-		UpdatedAt: json.JSONTime{Time: image.UpdatedAt.Timestamp},
+		Title:        image.Title,
+		Code:         image.Code,
+		URLs:         image.URLs.List(),
+		Details:      image.Details,
+		Photographer: image.Photographer,
+		CreatedAt:    json.JSONTime{Time: image.CreatedAt},
+		UpdatedAt:    json.JSONTime{Time: image.UpdatedAt},
 	}
 
-	if image.Title.Valid {
-		newImageJSON.Title = image.Title.String
+	if image.Rating != nil {
+		newImageJSON.Rating = *image.Rating
 	}
 
-	if image.Rating.Valid {
-		newImageJSON.Rating = int(image.Rating.Int64)
+	if image.Date != nil {
+		newImageJSON.Date = image.Date.String()
 	}
 
 	newImageJSON.Organized = image.Organized
 	newImageJSON.OCounter = image.OCounter
 
-	newImageJSON.File = getImageFileJSON(image)
+	for _, f := range image.Files.List() {
+		newImageJSON.Files = append(newImageJSON.Files, f.Base().Path)
+	}
 
 	return &newImageJSON
 }
 
-func getImageFileJSON(image *models.Image) *jsonschema.ImageFile {
-	ret := &jsonschema.ImageFile{}
-
-	if image.FileModTime.Valid {
-		ret.ModTime = json.JSONTime{Time: image.FileModTime.Timestamp}
-	}
-
-	if image.Size.Valid {
-		ret.Size = int(image.Size.Int64)
-	}
-
-	if image.Width.Valid {
-		ret.Width = int(image.Width.Int64)
-	}
-
-	if image.Height.Valid {
-		ret.Height = int(image.Height.Int64)
-	}
-
-	return ret
-}
-
 // GetStudioName returns the name of the provided image's studio. It returns an
 // empty string if there is no studio assigned to the image.
-func GetStudioName(reader models.StudioReader, image *models.Image) (string, error) {
-	if image.StudioID.Valid {
-		studio, err := reader.Find(int(image.StudioID.Int64))
+func GetStudioName(ctx context.Context, reader models.StudioGetter, image *models.Image) (string, error) {
+	if image.StudioID != nil {
+		studio, err := reader.Find(ctx, *image.StudioID)
 		if err != nil {
 			return "", err
 		}
 
 		if studio != nil {
-			return studio.Name.String, nil
+			return studio.Name, nil
 		}
 	}
 

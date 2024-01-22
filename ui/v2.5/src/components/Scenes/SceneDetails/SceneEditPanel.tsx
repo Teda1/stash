@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, lazy } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import {
   Button,
@@ -16,138 +16,169 @@ import {
   queryScrapeScene,
   queryScrapeSceneURL,
   useListSceneScrapers,
-  useSceneUpdate,
   mutateReloadScrapers,
   queryScrapeSceneQueryFragment,
 } from "src/core/StashService";
 import {
-  PerformerSelect,
   TagSelect,
   StudioSelect,
   GallerySelect,
-  Icon,
-  LoadingIndicator,
-  ImageInput,
-  URLField,
-} from "src/components/Shared";
-import useToast from "src/hooks/Toast";
-import { ImageUtils, FormUtils, TextUtils, getStashIDs } from "src/utils";
-import { MovieSelect } from "src/components/Shared/Select";
+  MovieSelect,
+} from "src/components/Shared/Select";
+import { Icon } from "src/components/Shared/Icon";
+import { LoadingIndicator } from "src/components/Shared/LoadingIndicator";
+import { ImageInput } from "src/components/Shared/ImageInput";
+import { useToast } from "src/hooks/Toast";
+import ImageUtils from "src/utils/image";
+import { getStashIDs } from "src/utils/stashIds";
 import { useFormik } from "formik";
 import { Prompt } from "react-router-dom";
 import { ConfigurationContext } from "src/hooks/Config";
 import { stashboxDisplayName } from "src/utils/stashbox";
 import { SceneMovieTable } from "./SceneMovieTable";
-import { RatingStars } from "./RatingStars";
+import { faSearch, faSyncAlt } from "@fortawesome/free-solid-svg-icons";
+import { objectTitle } from "src/core/files";
+import { galleryTitle } from "src/core/galleries";
+import { useRatingKeybinds } from "src/hooks/keybinds";
+import { lazyComponent } from "src/utils/lazyComponent";
+import isEqual from "lodash-es/isEqual";
 import {
-  faSearch,
-  faSyncAlt,
-  faTrashAlt,
-} from "@fortawesome/free-solid-svg-icons";
+  yupDateString,
+  yupFormikValidate,
+  yupUniqueStringList,
+} from "src/utils/yup";
+import {
+  Performer,
+  PerformerSelect,
+} from "src/components/Performers/PerformerSelect";
+import { formikUtils } from "src/utils/form";
 
-const SceneScrapeDialog = lazy(() => import("./SceneScrapeDialog"));
-const SceneQueryModal = lazy(() => import("./SceneQueryModal"));
+const SceneScrapeDialog = lazyComponent(() => import("./SceneScrapeDialog"));
+const SceneQueryModal = lazyComponent(() => import("./SceneQueryModal"));
 
 interface IProps {
-  scene: GQL.SceneDataFragment;
+  scene: Partial<GQL.SceneDataFragment>;
+  initialCoverImage?: string;
+  isNew?: boolean;
   isVisible: boolean;
-  onDelete: () => void;
-  onUpdate?: () => void;
+  onSubmit: (input: GQL.SceneCreateInput) => Promise<void>;
+  onDelete?: () => void;
 }
 
 export const SceneEditPanel: React.FC<IProps> = ({
   scene,
+  initialCoverImage,
+  isNew = false,
   isVisible,
+  onSubmit,
   onDelete,
 }) => {
   const intl = useIntl();
   const Toast = useToast();
+
   const [galleries, setGalleries] = useState<{ id: string; title: string }[]>(
-    scene.galleries.map((g) => ({
-      id: g.id,
-      title: g.title ?? TextUtils.fileNameFromPath(g.path ?? ""),
-    }))
+    []
   );
+  const [performers, setPerformers] = useState<Performer[]>([]);
 
   const Scrapers = useListSceneScrapers();
   const [fragmentScrapers, setFragmentScrapers] = useState<GQL.Scraper[]>([]);
   const [queryableScrapers, setQueryableScrapers] = useState<GQL.Scraper[]>([]);
 
-  const [scraper, setScraper] = useState<GQL.ScraperSourceInput | undefined>();
-  const [
-    isScraperQueryModalOpen,
-    setIsScraperQueryModalOpen,
-  ] = useState<boolean>(false);
+  const [scraper, setScraper] = useState<GQL.ScraperSourceInput>();
+  const [isScraperQueryModalOpen, setIsScraperQueryModalOpen] =
+    useState<boolean>(false);
   const [scrapedScene, setScrapedScene] = useState<GQL.ScrapedScene | null>();
-  const [endpoint, setEndpoint] = useState<string | undefined>();
-
-  const [coverImagePreview, setCoverImagePreview] = useState<
-    string | undefined
-  >();
+  const [endpoint, setEndpoint] = useState<string>();
 
   useEffect(() => {
-    setCoverImagePreview(scene.paths.screenshot ?? undefined);
-  }, [scene.paths.screenshot]);
+    setGalleries(
+      scene.galleries?.map((g) => ({
+        id: g.id,
+        title: galleryTitle(g),
+      })) ?? []
+    );
+  }, [scene.galleries]);
+
+  useEffect(() => {
+    setPerformers(scene.performers ?? []);
+  }, [scene.performers]);
 
   const { configuration: stashConfig } = React.useContext(ConfigurationContext);
 
   // Network state
   const [isLoading, setIsLoading] = useState(false);
 
-  const [updateScene] = useSceneUpdate();
-
   const schema = yup.object({
-    title: yup.string().optional().nullable(),
-    details: yup.string().optional().nullable(),
-    url: yup.string().optional().nullable(),
-    date: yup.string().optional().nullable(),
-    rating: yup.number().optional().nullable(),
-    gallery_ids: yup.array(yup.string().required()).optional().nullable(),
-    studio_id: yup.string().optional().nullable(),
-    performer_ids: yup.array(yup.string().required()).optional().nullable(),
+    title: yup.string().ensure(),
+    code: yup.string().ensure(),
+    urls: yupUniqueStringList(intl),
+    date: yupDateString(intl),
+    director: yup.string().ensure(),
+    rating100: yup.number().integer().nullable().defined(),
+    gallery_ids: yup.array(yup.string().required()).defined(),
+    studio_id: yup.string().required().nullable(),
+    performer_ids: yup.array(yup.string().required()).defined(),
     movies: yup
-      .object({
-        movie_id: yup.string().required(),
-        scene_index: yup.string().optional().nullable(),
-      })
-      .optional()
-      .nullable(),
-    tag_ids: yup.array(yup.string().required()).optional().nullable(),
-    cover_image: yup.string().optional().nullable(),
-    stash_ids: yup.mixed<GQL.StashIdInput>().optional().nullable(),
+      .array(
+        yup.object({
+          movie_id: yup.string().required(),
+          scene_index: yup.number().integer().nullable().defined(),
+        })
+      )
+      .defined(),
+    tag_ids: yup.array(yup.string().required()).defined(),
+    stash_ids: yup.mixed<GQL.StashIdInput[]>().defined(),
+    details: yup.string().ensure(),
+    cover_image: yup.string().nullable().optional(),
   });
 
   const initialValues = useMemo(
     () => ({
       title: scene.title ?? "",
-      details: scene.details ?? "",
-      url: scene.url ?? "",
+      code: scene.code ?? "",
+      urls: scene.urls ?? [],
       date: scene.date ?? "",
-      rating: scene.rating ?? null,
+      director: scene.director ?? "",
+      rating100: scene.rating100 ?? null,
       gallery_ids: (scene.galleries ?? []).map((g) => g.id),
-      studio_id: scene.studio?.id,
+      studio_id: scene.studio?.id ?? null,
       performer_ids: (scene.performers ?? []).map((p) => p.id),
       movies: (scene.movies ?? []).map((m) => {
-        return { movie_id: m.movie.id, scene_index: m.scene_index };
+        return { movie_id: m.movie.id, scene_index: m.scene_index ?? null };
       }),
       tag_ids: (scene.tags ?? []).map((t) => t.id),
-      cover_image: undefined,
       stash_ids: getStashIDs(scene.stash_ids),
+      details: scene.details ?? "",
+      cover_image: initialCoverImage,
     }),
-    [scene]
+    [scene, initialCoverImage]
   );
 
-  type InputValues = typeof initialValues;
+  type InputValues = yup.InferType<typeof schema>;
 
-  const formik = useFormik({
+  const formik = useFormik<InputValues>({
     initialValues,
     enableReinitialize: true,
-    validationSchema: schema,
-    onSubmit: (values) => onSave(getSceneInput(values)),
+    validate: yupFormikValidate(schema),
+    onSubmit: (values) => onSave(schema.cast(values)),
   });
 
+  const coverImagePreview = useMemo(() => {
+    const sceneImage = scene.paths?.screenshot;
+    const formImage = formik.values.cover_image;
+    if (formImage === null && sceneImage) {
+      const sceneImageURL = new URL(sceneImage);
+      sceneImageURL.searchParams.set("default", "true");
+      return sceneImageURL.toString();
+    } else if (formImage) {
+      return formImage;
+    }
+    return sceneImage;
+  }, [formik.values.cover_image, scene.paths?.screenshot]);
+
   function setRating(v: number) {
-    formik.setFieldValue("rating", v);
+    formik.setFieldValue("rating100", v);
   }
 
   interface IGallerySelectValue {
@@ -163,50 +194,42 @@ export const SceneEditPanel: React.FC<IProps> = ({
     );
   }
 
+  function onSetPerformers(items: Performer[]) {
+    setPerformers(items);
+    formik.setFieldValue(
+      "performer_ids",
+      items.map((item) => item.id)
+    );
+  }
+
+  useRatingKeybinds(
+    isVisible,
+    stashConfig?.ui?.ratingSystemOptions?.type,
+    setRating
+  );
+
   useEffect(() => {
     if (isVisible) {
       Mousetrap.bind("s s", () => {
-        formik.handleSubmit();
+        if (formik.dirty) {
+          formik.submitForm();
+        }
       });
       Mousetrap.bind("d d", () => {
-        onDelete();
-      });
-
-      // numeric keypresses get caught by jwplayer, so blur the element
-      // if the rating sequence is started
-      Mousetrap.bind("r", () => {
-        if (document.activeElement instanceof HTMLElement) {
-          document.activeElement.blur();
+        if (onDelete) {
+          onDelete();
         }
-
-        Mousetrap.bind("0", () => setRating(NaN));
-        Mousetrap.bind("1", () => setRating(1));
-        Mousetrap.bind("2", () => setRating(2));
-        Mousetrap.bind("3", () => setRating(3));
-        Mousetrap.bind("4", () => setRating(4));
-        Mousetrap.bind("5", () => setRating(5));
-
-        setTimeout(() => {
-          Mousetrap.unbind("0");
-          Mousetrap.unbind("1");
-          Mousetrap.unbind("2");
-          Mousetrap.unbind("3");
-          Mousetrap.unbind("4");
-          Mousetrap.unbind("5");
-        }, 1000);
       });
 
       return () => {
         Mousetrap.unbind("s s");
         Mousetrap.unbind("d d");
-
-        Mousetrap.unbind("r");
       };
     }
   });
 
   useEffect(() => {
-    const toFilter = Scrapers?.data?.listSceneScrapers ?? [];
+    const toFilter = Scrapers?.data?.listScrapers ?? [];
 
     const newFragmentScrapers = toFilter.filter((s) =>
       s.scene?.supported_scrapes.includes(GQL.ScrapeType.Fragment)
@@ -219,15 +242,6 @@ export const SceneEditPanel: React.FC<IProps> = ({
     setQueryableScrapers(newQueryableScrapers);
   }, [Scrapers, stashConfig]);
 
-  const imageEncoding = ImageUtils.usePasteImage(onImageLoad, true);
-
-  function getSceneInput(input: InputValues): GQL.SceneUpdateInput {
-    return {
-      id: scene.id,
-      ...input,
-    };
-  }
-
   function setMovieIds(movieIds: string[]) {
     const existingMovies = formik.values.movies;
 
@@ -239,48 +253,23 @@ export const SceneEditPanel: React.FC<IProps> = ({
 
       return {
         movie_id: m,
+        scene_index: null,
       };
     });
 
     formik.setFieldValue("movies", newMovies);
   }
 
-  async function onSave(input: GQL.SceneUpdateInput) {
+  async function onSave(input: InputValues) {
     setIsLoading(true);
     try {
-      const result = await updateScene({
-        variables: {
-          input: {
-            ...input,
-            rating: input.rating ?? null,
-          },
-        },
-      });
-      if (result.data?.sceneUpdate) {
-        Toast.success({
-          content: intl.formatMessage(
-            { id: "toast.updated_entity" },
-            { entity: intl.formatMessage({ id: "scene" }).toLocaleLowerCase() }
-          ),
-        });
-        // clear the cover image so that it doesn't appear dirty
-        formik.resetForm({ values: formik.values });
-      }
+      await onSubmit(input);
+      formik.resetForm();
     } catch (e) {
       Toast.error(e);
     }
     setIsLoading(false);
   }
-
-  const removeStashID = (stashID: GQL.StashIdInput) => {
-    formik.setFieldValue(
-      "stash_ids",
-      formik.values.stash_ids.filter(
-        (s) =>
-          !(s.endpoint === stashID.endpoint && s.stash_id === stashID.stash_id)
-      )
-    );
-  };
 
   function renderTableMovies() {
     return (
@@ -293,8 +282,9 @@ export const SceneEditPanel: React.FC<IProps> = ({
     );
   }
 
+  const encodingImage = ImageUtils.usePasteImage(onImageLoad);
+
   function onImageLoad(imageData: string) {
-    setCoverImagePreview(imageData);
     formik.setFieldValue("cover_image", imageData);
   }
 
@@ -305,11 +295,9 @@ export const SceneEditPanel: React.FC<IProps> = ({
   async function onScrapeClicked(s: GQL.ScraperSourceInput) {
     setIsLoading(true);
     try {
-      const result = await queryScrapeScene(s, scene.id);
+      const result = await queryScrapeScene(s, scene.id!);
       if (!result.data || !result.data.scrapeSingleScene?.length) {
-        Toast.success({
-          content: "No scenes found",
-        });
+        Toast.success("No scenes found");
         return;
       }
       // assume one returned scene
@@ -330,17 +318,17 @@ export const SceneEditPanel: React.FC<IProps> = ({
     try {
       const input: GQL.ScrapedSceneInput = {
         date: fragment.date,
+        code: fragment.code,
         details: fragment.details,
+        director: fragment.director,
         remote_site_id: fragment.remote_site_id,
         title: fragment.title,
-        url: fragment.url,
+        urls: fragment.urls,
       };
 
       const result = await queryScrapeSceneQueryFragment(s, input);
       if (!result.data || !result.data.scrapeSingleScene?.length) {
-        Toast.success({
-          content: "No scenes found",
-        });
+        Toast.success("No scenes found");
         return;
       }
       // assume one returned scene
@@ -362,9 +350,6 @@ export const SceneEditPanel: React.FC<IProps> = ({
     setIsLoading(true);
     try {
       await mutateReloadScrapers();
-
-      // reload the performer scrapers
-      await Scrapers.refetch();
     } catch (e) {
       Toast.error(e);
     } finally {
@@ -384,14 +369,19 @@ export const SceneEditPanel: React.FC<IProps> = ({
       return;
     }
 
-    const currentScene = getSceneInput(formik.values);
+    const currentScene = {
+      id: scene.id!,
+      ...formik.values,
+    };
+
     if (!currentScene.cover_image) {
-      currentScene.cover_image = scene.paths.screenshot;
+      currentScene.cover_image = scene.paths?.screenshot;
     }
 
     return (
       <SceneScrapeDialog
         scene={currentScene}
+        scenePerformers={performers}
         scraped={scrapedScene}
         endpoint={endpoint}
         onClose={(s) => onScrapeDialogClosed(s)}
@@ -469,7 +459,7 @@ export const SceneEditPanel: React.FC<IProps> = ({
           setScraper(undefined);
           onSceneSelected(s);
         }}
-        name={formik.values.title || ""}
+        name={formik.values.title || objectTitle(scene) || ""}
       />
     );
   };
@@ -517,7 +507,7 @@ export const SceneEditPanel: React.FC<IProps> = ({
   }
 
   function urlScrapable(scrapedUrl: string): boolean {
-    return (Scrapers?.data?.listSceneScrapers ?? []).some((s) =>
+    return (Scrapers?.data?.listScrapers ?? []).some((s) =>
       (s?.scene?.urls ?? []).some((u) => scrapedUrl.includes(u))
     );
   }
@@ -529,16 +519,24 @@ export const SceneEditPanel: React.FC<IProps> = ({
       formik.setFieldValue("title", updatedScene.title);
     }
 
+    if (updatedScene.code) {
+      formik.setFieldValue("code", updatedScene.code);
+    }
+
     if (updatedScene.details) {
       formik.setFieldValue("details", updatedScene.details);
+    }
+
+    if (updatedScene.director) {
+      formik.setFieldValue("director", updatedScene.director);
     }
 
     if (updatedScene.date) {
       formik.setFieldValue("date", updatedScene.date);
     }
 
-    if (updatedScene.url) {
-      formik.setFieldValue("url", updatedScene.url);
+    if (updatedScene.urls) {
+      formik.setFieldValue("urls", updatedScene.urls);
     }
 
     if (updatedScene.studio && updatedScene.studio.stored_id) {
@@ -551,8 +549,15 @@ export const SceneEditPanel: React.FC<IProps> = ({
       });
 
       if (idPerfs.length > 0) {
-        const newIds = idPerfs.map((p) => p.stored_id);
-        formik.setFieldValue("performer_ids", newIds as string[]);
+        onSetPerformers(
+          idPerfs.map((p) => {
+            return {
+              id: p.stored_id!,
+              name: p.name ?? "",
+              alias_list: [],
+            };
+          })
+        );
       }
     }
 
@@ -581,7 +586,6 @@ export const SceneEditPanel: React.FC<IProps> = ({
     if (updatedScene.image) {
       // image is a base64 string
       formik.setFieldValue("cover_image", updatedScene.image);
-      setCoverImagePreview(updatedScene.image);
     }
 
     if (updatedScene.remote_site_id && endpoint) {
@@ -613,13 +617,13 @@ export const SceneEditPanel: React.FC<IProps> = ({
     }
   }
 
-  async function onScrapeSceneURL() {
-    if (!formik.values.url) {
+  async function onScrapeSceneURL(url: string) {
+    if (!url) {
       return;
     }
     setIsLoading(true);
     try {
-      const result = await queryScrapeSceneURL(formik.values.url);
+      const result = await queryScrapeSceneURL(url);
       if (!result.data || !result.data.scrapeSceneURL) {
         return;
       }
@@ -631,25 +635,148 @@ export const SceneEditPanel: React.FC<IProps> = ({
     }
   }
 
-  function renderTextField(field: string, title: string, placeholder?: string) {
-    return (
-      <Form.Group controlId={title} as={Row}>
-        {FormUtils.renderLabel({
-          title,
-        })}
-        <Col xs={9}>
-          <Form.Control
-            className="text-input"
-            placeholder={placeholder ?? title}
-            {...formik.getFieldProps(field)}
-            isInvalid={!!formik.getFieldMeta(field).error}
-          />
-        </Col>
-      </Form.Group>
-    );
-  }
+  const image = useMemo(() => {
+    if (encodingImage) {
+      return (
+        <LoadingIndicator
+          message={intl.formatMessage({ id: "actions.encoding_image" })}
+        />
+      );
+    }
+
+    if (coverImagePreview) {
+      return (
+        <img
+          className="scene-cover"
+          src={coverImagePreview}
+          alt={intl.formatMessage({ id: "cover_image" })}
+        />
+      );
+    }
+
+    return <div></div>;
+  }, [encodingImage, coverImagePreview, intl]);
 
   if (isLoading) return <LoadingIndicator />;
+
+  const splitProps = {
+    labelProps: {
+      column: true,
+      sm: 3,
+    },
+    fieldProps: {
+      sm: 9,
+    },
+  };
+  const fullWidthProps = {
+    labelProps: {
+      column: true,
+      sm: 3,
+      xl: 12,
+    },
+    fieldProps: {
+      sm: 9,
+      xl: 12,
+    },
+  };
+  const {
+    renderField,
+    renderInputField,
+    renderDateField,
+    renderRatingField,
+    renderURLListField,
+    renderStashIDsField,
+  } = formikUtils(intl, formik, splitProps);
+
+  function renderGalleriesField() {
+    const title = intl.formatMessage({ id: "galleries" });
+    const control = (
+      <GallerySelect
+        selected={galleries}
+        onSelect={(items) => onSetGalleries(items)}
+        isMulti
+      />
+    );
+
+    return renderField("gallery_ids", title, control);
+  }
+
+  function renderStudioField() {
+    const title = intl.formatMessage({ id: "studio" });
+    const control = (
+      <StudioSelect
+        onSelect={(items) =>
+          formik.setFieldValue(
+            "studio_id",
+            items.length > 0 ? items[0]?.id : null
+          )
+        }
+        ids={formik.values.studio_id ? [formik.values.studio_id] : []}
+      />
+    );
+
+    return renderField("studio_id", title, control);
+  }
+
+  function renderPerformersField() {
+    const title = intl.formatMessage({ id: "performers" });
+    const control = (
+      <PerformerSelect isMulti onSelect={onSetPerformers} values={performers} />
+    );
+
+    return renderField("performer_ids", title, control, fullWidthProps);
+  }
+
+  function renderMoviesField() {
+    const title = intl.formatMessage({ id: "movies" });
+    const control = (
+      <>
+        <MovieSelect
+          isMulti
+          onSelect={(items) => setMovieIds(items.map((item) => item.id))}
+          ids={formik.values.movies.map((m) => m.movie_id)}
+        />
+        {renderTableMovies()}
+      </>
+    );
+
+    return renderField("movies", title, control, fullWidthProps);
+  }
+
+  function renderTagsField() {
+    const title = intl.formatMessage({ id: "tags" });
+    const control = (
+      <TagSelect
+        isMulti
+        onSelect={(items) =>
+          formik.setFieldValue(
+            "tag_ids",
+            items.map((item) => item.id)
+          )
+        }
+        ids={formik.values.tag_ids}
+        hoverPlacement="right"
+      />
+    );
+
+    return renderField("tag_ids", title, control, fullWidthProps);
+  }
+
+  function renderDetailsField() {
+    const props = {
+      labelProps: {
+        column: true,
+        sm: 3,
+        lg: 12,
+      },
+      fieldProps: {
+        sm: 9,
+        lg: 12,
+      },
+    };
+
+    return renderInputField("details", "textarea", "details", props);
+  }
 
   return (
     <div id="scene-edit-details">
@@ -661,255 +788,76 @@ export const SceneEditPanel: React.FC<IProps> = ({
       {renderScrapeQueryModal()}
       {maybeRenderScrapeDialog()}
       <Form noValidate onSubmit={formik.handleSubmit}>
-        <div className="form-container edit-buttons-container row px-3 pt-3">
+        <Row className="form-container edit-buttons-container px-3 pt-3">
           <div className="edit-buttons mb-3 pl-0">
             <Button
               className="edit-button"
               variant="primary"
-              disabled={!formik.dirty}
+              disabled={
+                (!isNew && !formik.dirty) || !isEqual(formik.errors, {})
+              }
               onClick={() => formik.submitForm()}
             >
               <FormattedMessage id="actions.save" />
             </Button>
-            <Button
-              className="edit-button"
-              variant="danger"
-              onClick={() => onDelete()}
-            >
-              <FormattedMessage id="actions.delete" />
-            </Button>
-          </div>
-          <div className="ml-auto pr-3 text-right d-flex">
-            <ButtonGroup className="scraper-group">
-              {renderScraperMenu()}
-              {renderScrapeQueryMenu()}
-            </ButtonGroup>
-          </div>
-        </div>
-        <div className="form-container row px-3">
-          <div className="col-12 col-lg-7 col-xl-12">
-            {renderTextField("title", intl.formatMessage({ id: "title" }))}
-            <Form.Group controlId="url" as={Row}>
-              <Col xs={3} className="pr-0 url-label">
-                <Form.Label className="col-form-label">
-                  <FormattedMessage id="url" />
-                </Form.Label>
-              </Col>
-              <Col xs={9}>
-                <URLField
-                  {...formik.getFieldProps("url")}
-                  onScrapeClick={onScrapeSceneURL}
-                  urlScrapable={urlScrapable}
-                  isInvalid={!!formik.getFieldMeta("url").error}
-                />
-              </Col>
-            </Form.Group>
-            {renderTextField(
-              "date",
-              intl.formatMessage({ id: "date" }),
-              "YYYY-MM-DD"
+            {onDelete && (
+              <Button
+                className="edit-button"
+                variant="danger"
+                onClick={() => onDelete()}
+              >
+                <FormattedMessage id="actions.delete" />
+              </Button>
             )}
-            <Form.Group controlId="rating" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "rating" }),
-              })}
-              <Col xs={9}>
-                <RatingStars
-                  value={formik.values.rating ?? undefined}
-                  onSetRating={(value) =>
-                    formik.setFieldValue("rating", value ?? null)
-                  }
-                />
-              </Col>
-            </Form.Group>
-            <Form.Group controlId="galleries" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "galleries" }),
-                labelProps: {
-                  column: true,
-                  sm: 3,
-                },
-              })}
-              <Col sm={9}>
-                <GallerySelect
-                  galleries={galleries}
-                  onSelect={(items) => onSetGalleries(items)}
-                />
-              </Col>
-            </Form.Group>
-
-            <Form.Group controlId="studio" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "studio" }),
-                labelProps: {
-                  column: true,
-                  sm: 3,
-                },
-              })}
-              <Col sm={9}>
-                <StudioSelect
-                  onSelect={(items) =>
-                    formik.setFieldValue(
-                      "studio_id",
-                      items.length > 0 ? items[0]?.id : null
-                    )
-                  }
-                  ids={formik.values.studio_id ? [formik.values.studio_id] : []}
-                />
-              </Col>
-            </Form.Group>
-
-            <Form.Group controlId="performers" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "performers" }),
-                labelProps: {
-                  column: true,
-                  sm: 3,
-                  xl: 12,
-                },
-              })}
-              <Col sm={9} xl={12}>
-                <PerformerSelect
-                  isMulti
-                  onSelect={(items) =>
-                    formik.setFieldValue(
-                      "performer_ids",
-                      items.map((item) => item.id)
-                    )
-                  }
-                  ids={formik.values.performer_ids}
-                />
-              </Col>
-            </Form.Group>
-
-            <Form.Group controlId="moviesScenes" as={Row}>
-              {FormUtils.renderLabel({
-                title: `${intl.formatMessage({
-                  id: "movies",
-                })}/${intl.formatMessage({ id: "scenes" })}`,
-                labelProps: {
-                  column: true,
-                  sm: 3,
-                  xl: 12,
-                },
-              })}
-              <Col sm={9} xl={12}>
-                <MovieSelect
-                  isMulti
-                  onSelect={(items) =>
-                    setMovieIds(items.map((item) => item.id))
-                  }
-                  ids={formik.values.movies.map((m) => m.movie_id)}
-                />
-                {renderTableMovies()}
-              </Col>
-            </Form.Group>
-
-            <Form.Group controlId="tags" as={Row}>
-              {FormUtils.renderLabel({
-                title: intl.formatMessage({ id: "tags" }),
-                labelProps: {
-                  column: true,
-                  sm: 3,
-                  xl: 12,
-                },
-              })}
-              <Col sm={9} xl={12}>
-                <TagSelect
-                  isMulti
-                  onSelect={(items) =>
-                    formik.setFieldValue(
-                      "tag_ids",
-                      items.map((item) => item.id)
-                    )
-                  }
-                  ids={formik.values.tag_ids}
-                />
-              </Col>
-            </Form.Group>
-            {formik.values.stash_ids.length ? (
-              <Form.Group controlId="stashIDs">
-                <Form.Label>
-                  <FormattedMessage id="stash_ids" />
-                </Form.Label>
-                <ul className="pl-0">
-                  {formik.values.stash_ids.map((stashID) => {
-                    const base = stashID.endpoint.match(
-                      /https?:\/\/.*?\//
-                    )?.[0];
-                    const link = base ? (
-                      <a
-                        href={`${base}scenes/${stashID.stash_id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {stashID.stash_id}
-                      </a>
-                    ) : (
-                      stashID.stash_id
-                    );
-                    return (
-                      <li key={stashID.stash_id} className="row no-gutters">
-                        <Button
-                          variant="danger"
-                          className="mr-2 py-0"
-                          title={intl.formatMessage(
-                            { id: "actions.delete_entity" },
-                            {
-                              entityType: intl.formatMessage({
-                                id: "stash_id",
-                              }),
-                            }
-                          )}
-                          onClick={() => removeStashID(stashID)}
-                        >
-                          <Icon icon={faTrashAlt} />
-                        </Button>
-                        {link}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </Form.Group>
-            ) : undefined}
           </div>
-          <div className="col-12 col-lg-5 col-xl-12">
-            <Form.Group controlId="details">
+          {!isNew && (
+            <div className="ml-auto text-right d-flex">
+              <ButtonGroup className="scraper-group">
+                {renderScraperMenu()}
+                {renderScrapeQueryMenu()}
+              </ButtonGroup>
+            </div>
+          )}
+        </Row>
+        <Row className="form-container px-3">
+          <Col lg={7} xl={12}>
+            {renderInputField("title")}
+            {renderInputField("code", "text", "scene_code")}
+
+            {renderURLListField("urls", onScrapeSceneURL, urlScrapable)}
+
+            {renderDateField("date")}
+            {renderInputField("director")}
+            {renderRatingField("rating100", "rating")}
+
+            {renderGalleriesField()}
+            {renderStudioField()}
+            {renderPerformersField()}
+            {renderMoviesField()}
+            {renderTagsField()}
+
+            {renderStashIDsField(
+              "stash_ids",
+              "scenes",
+              "stash_ids",
+              fullWidthProps
+            )}
+          </Col>
+          <Col lg={5} xl={12}>
+            {renderDetailsField()}
+            <Form.Group controlId="cover_image">
               <Form.Label>
-                <FormattedMessage id="details" />
+                <FormattedMessage id="cover_image" />
               </Form.Label>
-              <Form.Control
-                as="textarea"
-                className="scene-description text-input"
-                onChange={(newValue: React.ChangeEvent<HTMLTextAreaElement>) =>
-                  formik.setFieldValue("details", newValue.currentTarget.value)
-                }
-                value={formik.values.details}
+              {image}
+              <ImageInput
+                isEditing
+                onImageChange={onCoverImageChange}
+                onImageURL={onImageLoad}
               />
             </Form.Group>
-            <div>
-              <Form.Group controlId="cover">
-                <Form.Label>
-                  <FormattedMessage id="cover_image" />
-                </Form.Label>
-                {imageEncoding ? (
-                  <LoadingIndicator message="Encoding image..." />
-                ) : (
-                  <img
-                    className="scene-cover"
-                    src={coverImagePreview}
-                    alt={intl.formatMessage({ id: "cover_image" })}
-                  />
-                )}
-                <ImageInput
-                  isEditing
-                  onImageChange={onCoverImageChange}
-                  onImageURL={onImageLoad}
-                />
-              </Form.Group>
-            </div>
-          </div>
-        </div>
+          </Col>
+        </Row>
       </Form>
     </div>
   );

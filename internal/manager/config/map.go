@@ -10,7 +10,7 @@ import (
 // HACK: viper changes map keys to case insensitive values, so the workaround is to
 // convert the map to use snake-case keys
 
-// toSnakeCase converts a string to snake_case
+// toSnakeCase converts a string from camelCase to snake_case
 // NOTE: a double capital will be converted in a way that will yield a different result
 // when converted back to camel case.
 // For example: someIDs => some_ids => someIds
@@ -30,57 +30,53 @@ func toSnakeCase(v string) string {
 	return buf.String()
 }
 
+// fromSnakeCase converts a string from snake_case to camelCase
 func fromSnakeCase(v string) string {
 	var buf bytes.Buffer
-	cap := false
+	leadingUnderscore := true
+	capvar := false
 	for i, c := range v {
 		switch {
-		case c == '_' && i > 0:
-			cap = true
-		case cap:
+		case c == '_' && !leadingUnderscore && i > 0:
+			capvar = true
+		case c == '_' && leadingUnderscore:
+			buf.WriteRune(c)
+		case capvar:
 			buf.WriteRune(unicode.ToUpper(c))
-			cap = false
+			capvar = false
 		default:
+			leadingUnderscore = false
 			buf.WriteRune(c)
 		}
 	}
 	return buf.String()
 }
 
-// copyAndInsensitiviseMap behaves like insensitiviseMap, but creates a copy of
-// any map it makes case insensitive.
-func toSnakeCaseMap(m map[string]interface{}) map[string]interface{} {
-	nm := make(map[string]interface{})
-
-	for key, val := range m {
-		adjKey := toSnakeCase(key)
-		nm[adjKey] = val
-	}
-
-	return nm
+// fromSnakeCaseMap recursively converts a map using snake_case keys to camelCase keys
+func fromSnakeCaseMap(m map[string]interface{}) map[string]interface{} {
+	return fromSnakeCaseValue(m).(map[string]interface{})
 }
 
-// convertMapValue converts values into something that can be marshalled in JSON
-// This means converting map[interface{}]interface{} to map[string]interface{} where ever
-// encountered.
-func convertMapValue(val interface{}) interface{} {
+func fromSnakeCaseValue(val interface{}) interface{} {
 	switch v := val.(type) {
 	case map[interface{}]interface{}:
 		ret := cast.ToStringMap(v)
 		for k, vv := range ret {
-			ret[k] = convertMapValue(vv)
+			adjKey := fromSnakeCase(k)
+			ret[adjKey] = fromSnakeCaseValue(vv)
 		}
 		return ret
 	case map[string]interface{}:
 		ret := make(map[string]interface{})
 		for k, vv := range v {
-			ret[k] = convertMapValue(vv)
+			adjKey := fromSnakeCase(k)
+			ret[adjKey] = fromSnakeCaseValue(vv)
 		}
 		return ret
 	case []interface{}:
 		ret := make([]interface{}, len(v))
 		for i, vv := range v {
-			ret[i] = convertMapValue(vv)
+			ret[i] = fromSnakeCaseValue(vv)
 		}
 		return ret
 	default:
@@ -88,13 +84,34 @@ func convertMapValue(val interface{}) interface{} {
 	}
 }
 
-func fromSnakeCaseMap(m map[string]interface{}) map[string]interface{} {
-	nm := make(map[string]interface{})
+// toSnakeCaseMap recursively converts a map using camelCase keys to snake_case keys
+func toSnakeCaseMap(m map[string]interface{}) map[string]interface{} {
+	return toSnakeCaseValue(m).(map[string]interface{})
+}
 
-	for key, val := range m {
-		adjKey := fromSnakeCase(key)
-		nm[adjKey] = convertMapValue(val)
+func toSnakeCaseValue(val interface{}) interface{} {
+	switch v := val.(type) {
+	case map[interface{}]interface{}:
+		ret := cast.ToStringMap(v)
+		for k, vv := range ret {
+			adjKey := toSnakeCase(k)
+			ret[adjKey] = toSnakeCaseValue(vv)
+		}
+		return ret
+	case map[string]interface{}:
+		ret := make(map[string]interface{})
+		for k, vv := range v {
+			adjKey := toSnakeCase(k)
+			ret[adjKey] = toSnakeCaseValue(vv)
+		}
+		return ret
+	case []interface{}:
+		ret := make([]interface{}, len(v))
+		for i, vv := range v {
+			ret[i] = toSnakeCaseValue(vv)
+		}
+		return ret
+	default:
+		return v
 	}
-
-	return nm
 }

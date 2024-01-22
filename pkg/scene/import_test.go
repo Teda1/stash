@@ -1,6 +1,7 @@
 package scene
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -13,15 +14,8 @@ import (
 
 const invalidImage = "aW1hZ2VCeXRlcw&&"
 
-const (
-	path = "path"
-
-	sceneNameErr = "sceneNameErr"
-	// existingSceneName = "existingSceneName"
-
-	existingSceneID     = 100
+var (
 	existingStudioID    = 101
-	existingGalleryID   = 102
 	existingPerformerID = 103
 	existingMovieID     = 104
 	existingTagID       = 105
@@ -29,10 +23,6 @@ const (
 	existingStudioName = "existingStudioName"
 	existingStudioErr  = "existingStudioErr"
 	missingStudioName  = "missingStudioName"
-
-	existingGalleryChecksum = "existingGalleryChecksum"
-	existingGalleryErr      = "existingGalleryErr"
-	missingGalleryChecksum  = "missingGalleryChecksum"
 
 	existingPerformerName = "existingPerformerName"
 	existingPerformerErr  = "existingPerformerErr"
@@ -45,190 +35,109 @@ const (
 	existingTagName = "existingTagName"
 	existingTagErr  = "existingTagErr"
 	missingTagName  = "missingTagName"
-
-	errPerformersID = 200
-	errGalleriesID  = 201
-
-	missingChecksum = "missingChecksum"
-	missingOSHash   = "missingOSHash"
-	errChecksum     = "errChecksum"
-	errOSHash       = "errOSHash"
 )
 
-func TestImporterName(t *testing.T) {
-	i := Importer{
-		Path:  path,
-		Input: jsonschema.Scene{},
-	}
-
-	assert.Equal(t, path, i.Name())
-}
+var testCtx = context.Background()
 
 func TestImporterPreImport(t *testing.T) {
 	i := Importer{
-		Path: path,
 		Input: jsonschema.Scene{
 			Cover: invalidImage,
 		},
 	}
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
 	i.Input.Cover = imageBase64
 
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
 }
 
 func TestImporterPreImportWithStudio(t *testing.T) {
-	studioReaderWriter := &mocks.StudioReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		StudioWriter: studioReaderWriter,
-		Path:         path,
+		StudioWriter: db.Studio,
 		Input: jsonschema.Scene{
 			Studio: existingStudioName,
 		},
 	}
 
-	studioReaderWriter.On("FindByName", existingStudioName, false).Return(&models.Studio{
+	db.Studio.On("FindByName", testCtx, existingStudioName, false).Return(&models.Studio{
 		ID: existingStudioID,
 	}, nil).Once()
-	studioReaderWriter.On("FindByName", existingStudioErr, false).Return(nil, errors.New("FindByName error")).Once()
+	db.Studio.On("FindByName", testCtx, existingStudioErr, false).Return(nil, errors.New("FindByName error")).Once()
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(existingStudioID), i.scene.StudioID.Int64)
+	assert.Equal(t, existingStudioID, *i.scene.StudioID)
 
 	i.Input.Studio = existingStudioErr
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
-	studioReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingStudio(t *testing.T) {
-	studioReaderWriter := &mocks.StudioReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		Path:         path,
-		StudioWriter: studioReaderWriter,
+		StudioWriter: db.Studio,
 		Input: jsonschema.Scene{
 			Studio: missingStudioName,
 		},
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 	}
 
-	studioReaderWriter.On("FindByName", missingStudioName, false).Return(nil, nil).Times(3)
-	studioReaderWriter.On("Create", mock.AnythingOfType("models.Studio")).Return(&models.Studio{
-		ID: existingStudioID,
-	}, nil)
+	db.Studio.On("FindByName", testCtx, missingStudioName, false).Return(nil, nil).Times(3)
+	db.Studio.On("Create", testCtx, mock.AnythingOfType("*models.Studio")).Run(func(args mock.Arguments) {
+		s := args.Get(1).(*models.Studio)
+		s.ID = existingStudioID
+	}).Return(nil)
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumIgnore
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumCreate
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(existingStudioID), i.scene.StudioID.Int64)
+	assert.Equal(t, existingStudioID, *i.scene.StudioID)
 
-	studioReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingStudioCreateErr(t *testing.T) {
-	studioReaderWriter := &mocks.StudioReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		StudioWriter: studioReaderWriter,
-		Path:         path,
+		StudioWriter: db.Studio,
 		Input: jsonschema.Scene{
 			Studio: missingStudioName,
 		},
 		MissingRefBehaviour: models.ImportMissingRefEnumCreate,
 	}
 
-	studioReaderWriter.On("FindByName", missingStudioName, false).Return(nil, nil).Once()
-	studioReaderWriter.On("Create", mock.AnythingOfType("models.Studio")).Return(nil, errors.New("Create error"))
+	db.Studio.On("FindByName", testCtx, missingStudioName, false).Return(nil, nil).Once()
+	db.Studio.On("Create", testCtx, mock.AnythingOfType("*models.Studio")).Return(errors.New("Create error"))
 
-	err := i.PreImport()
-	assert.NotNil(t, err)
-}
-
-func TestImporterPreImportWithGallery(t *testing.T) {
-	galleryReaderWriter := &mocks.GalleryReaderWriter{}
-
-	i := Importer{
-		GalleryWriter:       galleryReaderWriter,
-		Path:                path,
-		MissingRefBehaviour: models.ImportMissingRefEnumFail,
-		Input: jsonschema.Scene{
-			Galleries: []string{
-				existingGalleryChecksum,
-			},
-		},
-	}
-
-	galleryReaderWriter.On("FindByChecksums", []string{existingGalleryChecksum}).Return([]*models.Gallery{
-		{
-			ID:       existingGalleryID,
-			Checksum: existingGalleryChecksum,
-		},
-	}, nil).Once()
-
-	galleryReaderWriter.On("FindByChecksums", []string{existingGalleryErr}).Return(nil, errors.New("FindByChecksums error")).Once()
-
-	err := i.PreImport()
-	assert.Nil(t, err)
-	assert.Equal(t, existingGalleryID, i.galleries[0].ID)
-
-	i.Input.Galleries = []string{existingGalleryErr}
-	err = i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
-	galleryReaderWriter.AssertExpectations(t)
-}
-
-func TestImporterPreImportWithMissingGallery(t *testing.T) {
-	galleryReaderWriter := &mocks.GalleryReaderWriter{}
-
-	i := Importer{
-		Path:          path,
-		GalleryWriter: galleryReaderWriter,
-		Input: jsonschema.Scene{
-			Galleries: []string{
-				missingGalleryChecksum,
-			},
-		},
-		MissingRefBehaviour: models.ImportMissingRefEnumFail,
-	}
-
-	galleryReaderWriter.On("FindByChecksums", []string{missingGalleryChecksum}).Return(nil, nil).Times(3)
-
-	err := i.PreImport()
-	assert.NotNil(t, err)
-
-	i.MissingRefBehaviour = models.ImportMissingRefEnumIgnore
-	err = i.PreImport()
-	assert.Nil(t, err)
-
-	i.MissingRefBehaviour = models.ImportMissingRefEnumCreate
-	err = i.PreImport()
-	assert.Nil(t, err)
-
-	galleryReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithPerformer(t *testing.T) {
-	performerReaderWriter := &mocks.PerformerReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		PerformerWriter:     performerReaderWriter,
-		Path:                path,
+		PerformerWriter:     db.Performer,
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 		Input: jsonschema.Scene{
 			Performers: []string{
@@ -237,31 +146,30 @@ func TestImporterPreImportWithPerformer(t *testing.T) {
 		},
 	}
 
-	performerReaderWriter.On("FindByNames", []string{existingPerformerName}, false).Return([]*models.Performer{
+	db.Performer.On("FindByNames", testCtx, []string{existingPerformerName}, false).Return([]*models.Performer{
 		{
 			ID:   existingPerformerID,
-			Name: models.NullString(existingPerformerName),
+			Name: existingPerformerName,
 		},
 	}, nil).Once()
-	performerReaderWriter.On("FindByNames", []string{existingPerformerErr}, false).Return(nil, errors.New("FindByNames error")).Once()
+	db.Performer.On("FindByNames", testCtx, []string{existingPerformerErr}, false).Return(nil, errors.New("FindByNames error")).Once()
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingPerformerID, i.performers[0].ID)
+	assert.Equal(t, []int{existingPerformerID}, i.scene.PerformerIDs.List())
 
 	i.Input.Performers = []string{existingPerformerErr}
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
-	performerReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingPerformer(t *testing.T) {
-	performerReaderWriter := &mocks.PerformerReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		Path:            path,
-		PerformerWriter: performerReaderWriter,
+		PerformerWriter: db.Performer,
 		Input: jsonschema.Scene{
 			Performers: []string{
 				missingPerformerName,
@@ -270,32 +178,32 @@ func TestImporterPreImportWithMissingPerformer(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 	}
 
-	performerReaderWriter.On("FindByNames", []string{missingPerformerName}, false).Return(nil, nil).Times(3)
-	performerReaderWriter.On("Create", mock.AnythingOfType("models.Performer")).Return(&models.Performer{
-		ID: existingPerformerID,
-	}, nil)
+	db.Performer.On("FindByNames", testCtx, []string{missingPerformerName}, false).Return(nil, nil).Times(3)
+	db.Performer.On("Create", testCtx, mock.AnythingOfType("*models.Performer")).Run(func(args mock.Arguments) {
+		p := args.Get(1).(*models.Performer)
+		p.ID = existingPerformerID
+	}).Return(nil)
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumIgnore
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumCreate
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingPerformerID, i.performers[0].ID)
+	assert.Equal(t, []int{existingPerformerID}, i.scene.PerformerIDs.List())
 
-	performerReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingPerformerCreateErr(t *testing.T) {
-	performerReaderWriter := &mocks.PerformerReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		PerformerWriter: performerReaderWriter,
-		Path:            path,
+		PerformerWriter: db.Performer,
 		Input: jsonschema.Scene{
 			Performers: []string{
 				missingPerformerName,
@@ -304,19 +212,20 @@ func TestImporterPreImportWithMissingPerformerCreateErr(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumCreate,
 	}
 
-	performerReaderWriter.On("FindByNames", []string{missingPerformerName}, false).Return(nil, nil).Once()
-	performerReaderWriter.On("Create", mock.AnythingOfType("models.Performer")).Return(nil, errors.New("Create error"))
+	db.Performer.On("FindByNames", testCtx, []string{missingPerformerName}, false).Return(nil, nil).Once()
+	db.Performer.On("Create", testCtx, mock.AnythingOfType("*models.Performer")).Return(errors.New("Create error"))
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
+
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMovie(t *testing.T) {
-	movieReaderWriter := &mocks.MovieReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		MovieWriter:         movieReaderWriter,
-		Path:                path,
+		MovieWriter:         db.Movie,
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 		Input: jsonschema.Scene{
 			Movies: []jsonschema.SceneMovie{
@@ -328,29 +237,28 @@ func TestImporterPreImportWithMovie(t *testing.T) {
 		},
 	}
 
-	movieReaderWriter.On("FindByName", existingMovieName, false).Return(&models.Movie{
+	db.Movie.On("FindByName", testCtx, existingMovieName, false).Return(&models.Movie{
 		ID:   existingMovieID,
-		Name: models.NullString(existingMovieName),
+		Name: existingMovieName,
 	}, nil).Once()
-	movieReaderWriter.On("FindByName", existingMovieErr, false).Return(nil, errors.New("FindByName error")).Once()
+	db.Movie.On("FindByName", testCtx, existingMovieErr, false).Return(nil, errors.New("FindByName error")).Once()
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingMovieID, i.movies[0].MovieID)
+	assert.Equal(t, existingMovieID, i.scene.Movies.List()[0].MovieID)
 
 	i.Input.Movies[0].MovieName = existingMovieErr
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
-	movieReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingMovie(t *testing.T) {
-	movieReaderWriter := &mocks.MovieReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		Path:        path,
-		MovieWriter: movieReaderWriter,
+		MovieWriter: db.Movie,
 		Input: jsonschema.Scene{
 			Movies: []jsonschema.SceneMovie{
 				{
@@ -361,32 +269,32 @@ func TestImporterPreImportWithMissingMovie(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 	}
 
-	movieReaderWriter.On("FindByName", missingMovieName, false).Return(nil, nil).Times(3)
-	movieReaderWriter.On("Create", mock.AnythingOfType("models.Movie")).Return(&models.Movie{
-		ID: existingMovieID,
-	}, nil)
+	db.Movie.On("FindByName", testCtx, missingMovieName, false).Return(nil, nil).Times(3)
+	db.Movie.On("Create", testCtx, mock.AnythingOfType("*models.Movie")).Run(func(args mock.Arguments) {
+		m := args.Get(1).(*models.Movie)
+		m.ID = existingMovieID
+	}).Return(nil)
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumIgnore
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumCreate
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingMovieID, i.movies[0].MovieID)
+	assert.Equal(t, existingMovieID, i.scene.Movies.List()[0].MovieID)
 
-	movieReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingMovieCreateErr(t *testing.T) {
-	movieReaderWriter := &mocks.MovieReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		MovieWriter: movieReaderWriter,
-		Path:        path,
+		MovieWriter: db.Movie,
 		Input: jsonschema.Scene{
 			Movies: []jsonschema.SceneMovie{
 				{
@@ -397,19 +305,20 @@ func TestImporterPreImportWithMissingMovieCreateErr(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumCreate,
 	}
 
-	movieReaderWriter.On("FindByName", missingMovieName, false).Return(nil, nil).Once()
-	movieReaderWriter.On("Create", mock.AnythingOfType("models.Movie")).Return(nil, errors.New("Create error"))
+	db.Movie.On("FindByName", testCtx, missingMovieName, false).Return(nil, nil).Once()
+	db.Movie.On("Create", testCtx, mock.AnythingOfType("*models.Movie")).Return(errors.New("Create error"))
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
+
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithTag(t *testing.T) {
-	tagReaderWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		TagWriter:           tagReaderWriter,
-		Path:                path,
+		TagWriter:           db.Tag,
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 		Input: jsonschema.Scene{
 			Tags: []string{
@@ -418,31 +327,30 @@ func TestImporterPreImportWithTag(t *testing.T) {
 		},
 	}
 
-	tagReaderWriter.On("FindByNames", []string{existingTagName}, false).Return([]*models.Tag{
+	db.Tag.On("FindByNames", testCtx, []string{existingTagName}, false).Return([]*models.Tag{
 		{
 			ID:   existingTagID,
 			Name: existingTagName,
 		},
 	}, nil).Once()
-	tagReaderWriter.On("FindByNames", []string{existingTagErr}, false).Return(nil, errors.New("FindByNames error")).Once()
+	db.Tag.On("FindByNames", testCtx, []string{existingTagErr}, false).Return(nil, errors.New("FindByNames error")).Once()
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingTagID, i.tags[0].ID)
+	assert.Equal(t, []int{existingTagID}, i.scene.TagIDs.List())
 
 	i.Input.Tags = []string{existingTagErr}
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
-	tagReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingTag(t *testing.T) {
-	tagReaderWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		Path:      path,
-		TagWriter: tagReaderWriter,
+		TagWriter: db.Tag,
 		Input: jsonschema.Scene{
 			Tags: []string{
 				missingTagName,
@@ -451,32 +359,32 @@ func TestImporterPreImportWithMissingTag(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumFail,
 	}
 
-	tagReaderWriter.On("FindByNames", []string{missingTagName}, false).Return(nil, nil).Times(3)
-	tagReaderWriter.On("Create", mock.AnythingOfType("models.Tag")).Return(&models.Tag{
-		ID: existingTagID,
-	}, nil)
+	db.Tag.On("FindByNames", testCtx, []string{missingTagName}, false).Return(nil, nil).Times(3)
+	db.Tag.On("Create", testCtx, mock.AnythingOfType("*models.Tag")).Run(func(args mock.Arguments) {
+		t := args.Get(1).(*models.Tag)
+		t.ID = existingTagID
+	}).Return(nil)
 
-	err := i.PreImport()
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumIgnore
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
 
 	i.MissingRefBehaviour = models.ImportMissingRefEnumCreate
-	err = i.PreImport()
+	err = i.PreImport(testCtx)
 	assert.Nil(t, err)
-	assert.Equal(t, existingTagID, i.tags[0].ID)
+	assert.Equal(t, []int{existingTagID}, i.scene.TagIDs.List())
 
-	tagReaderWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }
 
 func TestImporterPreImportWithMissingTagCreateErr(t *testing.T) {
-	tagReaderWriter := &mocks.TagReaderWriter{}
+	db := mocks.NewDatabase()
 
 	i := Importer{
-		TagWriter: tagReaderWriter,
-		Path:      path,
+		TagWriter: db.Tag,
 		Input: jsonschema.Scene{
 			Tags: []string{
 				missingTagName,
@@ -485,271 +393,11 @@ func TestImporterPreImportWithMissingTagCreateErr(t *testing.T) {
 		MissingRefBehaviour: models.ImportMissingRefEnumCreate,
 	}
 
-	tagReaderWriter.On("FindByNames", []string{missingTagName}, false).Return(nil, nil).Once()
-	tagReaderWriter.On("Create", mock.AnythingOfType("models.Tag")).Return(nil, errors.New("Create error"))
+	db.Tag.On("FindByNames", testCtx, []string{missingTagName}, false).Return(nil, nil).Once()
+	db.Tag.On("Create", testCtx, mock.AnythingOfType("*models.Tag")).Return(errors.New("Create error"))
 
-	err := i.PreImport()
-	assert.NotNil(t, err)
-}
-
-func TestImporterPostImport(t *testing.T) {
-	readerWriter := &mocks.SceneReaderWriter{}
-
-	i := Importer{
-		ReaderWriter:   readerWriter,
-		coverImageData: imageBytes,
-	}
-
-	updateSceneImageErr := errors.New("UpdateCover error")
-
-	readerWriter.On("UpdateCover", sceneID, imageBytes).Return(nil).Once()
-	readerWriter.On("UpdateCover", errImageID, imageBytes).Return(updateSceneImageErr).Once()
-
-	err := i.PostImport(sceneID)
-	assert.Nil(t, err)
-
-	err = i.PostImport(errImageID)
+	err := i.PreImport(testCtx)
 	assert.NotNil(t, err)
 
-	readerWriter.AssertExpectations(t)
-}
-
-func TestImporterPostImportUpdateGalleries(t *testing.T) {
-	sceneReaderWriter := &mocks.SceneReaderWriter{}
-
-	i := Importer{
-		ReaderWriter: sceneReaderWriter,
-		galleries: []*models.Gallery{
-			{
-				ID: existingGalleryID,
-			},
-		},
-	}
-
-	updateErr := errors.New("UpdateGalleries error")
-
-	sceneReaderWriter.On("UpdateGalleries", sceneID, []int{existingGalleryID}).Return(nil).Once()
-	sceneReaderWriter.On("UpdateGalleries", errGalleriesID, mock.AnythingOfType("[]int")).Return(updateErr).Once()
-
-	err := i.PostImport(sceneID)
-	assert.Nil(t, err)
-
-	err = i.PostImport(errGalleriesID)
-	assert.NotNil(t, err)
-
-	sceneReaderWriter.AssertExpectations(t)
-}
-
-func TestImporterPostImportUpdatePerformers(t *testing.T) {
-	sceneReaderWriter := &mocks.SceneReaderWriter{}
-
-	i := Importer{
-		ReaderWriter: sceneReaderWriter,
-		performers: []*models.Performer{
-			{
-				ID: existingPerformerID,
-			},
-		},
-	}
-
-	updateErr := errors.New("UpdatePerformers error")
-
-	sceneReaderWriter.On("UpdatePerformers", sceneID, []int{existingPerformerID}).Return(nil).Once()
-	sceneReaderWriter.On("UpdatePerformers", errPerformersID, mock.AnythingOfType("[]int")).Return(updateErr).Once()
-
-	err := i.PostImport(sceneID)
-	assert.Nil(t, err)
-
-	err = i.PostImport(errPerformersID)
-	assert.NotNil(t, err)
-
-	sceneReaderWriter.AssertExpectations(t)
-}
-
-func TestImporterPostImportUpdateMovies(t *testing.T) {
-	sceneReaderWriter := &mocks.SceneReaderWriter{}
-
-	i := Importer{
-		ReaderWriter: sceneReaderWriter,
-		movies: []models.MoviesScenes{
-			{
-				MovieID: existingMovieID,
-			},
-		},
-	}
-
-	updateErr := errors.New("UpdateMovies error")
-
-	sceneReaderWriter.On("UpdateMovies", sceneID, []models.MoviesScenes{
-		{
-			MovieID: existingMovieID,
-			SceneID: sceneID,
-		},
-	}).Return(nil).Once()
-	sceneReaderWriter.On("UpdateMovies", errMoviesID, mock.AnythingOfType("[]models.MoviesScenes")).Return(updateErr).Once()
-
-	err := i.PostImport(sceneID)
-	assert.Nil(t, err)
-
-	err = i.PostImport(errMoviesID)
-	assert.NotNil(t, err)
-
-	sceneReaderWriter.AssertExpectations(t)
-}
-
-func TestImporterPostImportUpdateTags(t *testing.T) {
-	sceneReaderWriter := &mocks.SceneReaderWriter{}
-
-	i := Importer{
-		ReaderWriter: sceneReaderWriter,
-		tags: []*models.Tag{
-			{
-				ID: existingTagID,
-			},
-		},
-	}
-
-	updateErr := errors.New("UpdateTags error")
-
-	sceneReaderWriter.On("UpdateTags", sceneID, []int{existingTagID}).Return(nil).Once()
-	sceneReaderWriter.On("UpdateTags", errTagsID, mock.AnythingOfType("[]int")).Return(updateErr).Once()
-
-	err := i.PostImport(sceneID)
-	assert.Nil(t, err)
-
-	err = i.PostImport(errTagsID)
-	assert.NotNil(t, err)
-
-	sceneReaderWriter.AssertExpectations(t)
-}
-
-func TestImporterFindExistingID(t *testing.T) {
-	readerWriter := &mocks.SceneReaderWriter{}
-
-	i := Importer{
-		ReaderWriter: readerWriter,
-		Path:         path,
-		Input: jsonschema.Scene{
-			Checksum: missingChecksum,
-			OSHash:   missingOSHash,
-		},
-		FileNamingAlgorithm: models.HashAlgorithmMd5,
-	}
-
-	expectedErr := errors.New("FindBy* error")
-	readerWriter.On("FindByChecksum", missingChecksum).Return(nil, nil).Once()
-	readerWriter.On("FindByChecksum", checksum).Return(&models.Scene{
-		ID: existingSceneID,
-	}, nil).Once()
-	readerWriter.On("FindByChecksum", errChecksum).Return(nil, expectedErr).Once()
-
-	readerWriter.On("FindByOSHash", missingOSHash).Return(nil, nil).Once()
-	readerWriter.On("FindByOSHash", oshash).Return(&models.Scene{
-		ID: existingSceneID,
-	}, nil).Once()
-	readerWriter.On("FindByOSHash", errOSHash).Return(nil, expectedErr).Once()
-
-	id, err := i.FindExistingID()
-	assert.Nil(t, id)
-	assert.Nil(t, err)
-
-	i.Input.Checksum = checksum
-	id, err = i.FindExistingID()
-	assert.Equal(t, existingSceneID, *id)
-	assert.Nil(t, err)
-
-	i.Input.Checksum = errChecksum
-	id, err = i.FindExistingID()
-	assert.Nil(t, id)
-	assert.NotNil(t, err)
-
-	i.FileNamingAlgorithm = models.HashAlgorithmOshash
-	id, err = i.FindExistingID()
-	assert.Nil(t, id)
-	assert.Nil(t, err)
-
-	i.Input.OSHash = oshash
-	id, err = i.FindExistingID()
-	assert.Equal(t, existingSceneID, *id)
-	assert.Nil(t, err)
-
-	i.Input.OSHash = errOSHash
-	id, err = i.FindExistingID()
-	assert.Nil(t, id)
-	assert.NotNil(t, err)
-
-	readerWriter.AssertExpectations(t)
-}
-
-func TestCreate(t *testing.T) {
-	readerWriter := &mocks.SceneReaderWriter{}
-
-	scene := models.Scene{
-		Title: models.NullString(title),
-	}
-
-	sceneErr := models.Scene{
-		Title: models.NullString(sceneNameErr),
-	}
-
-	i := Importer{
-		ReaderWriter: readerWriter,
-		scene:        scene,
-	}
-
-	errCreate := errors.New("Create error")
-	readerWriter.On("Create", scene).Return(&models.Scene{
-		ID: sceneID,
-	}, nil).Once()
-	readerWriter.On("Create", sceneErr).Return(nil, errCreate).Once()
-
-	id, err := i.Create()
-	assert.Equal(t, sceneID, *id)
-	assert.Nil(t, err)
-	assert.Equal(t, sceneID, i.ID)
-
-	i.scene = sceneErr
-	id, err = i.Create()
-	assert.Nil(t, id)
-	assert.NotNil(t, err)
-
-	readerWriter.AssertExpectations(t)
-}
-
-func TestUpdate(t *testing.T) {
-	readerWriter := &mocks.SceneReaderWriter{}
-
-	scene := models.Scene{
-		Title: models.NullString(title),
-	}
-
-	sceneErr := models.Scene{
-		Title: models.NullString(sceneNameErr),
-	}
-
-	i := Importer{
-		ReaderWriter: readerWriter,
-		scene:        scene,
-	}
-
-	errUpdate := errors.New("Update error")
-
-	// id needs to be set for the mock input
-	scene.ID = sceneID
-	readerWriter.On("UpdateFull", scene).Return(nil, nil).Once()
-
-	err := i.Update(sceneID)
-	assert.Nil(t, err)
-	assert.Equal(t, sceneID, i.ID)
-
-	i.scene = sceneErr
-
-	// need to set id separately
-	sceneErr.ID = errImageID
-	readerWriter.On("UpdateFull", sceneErr).Return(nil, errUpdate).Once()
-
-	err = i.Update(errImageID)
-	assert.NotNil(t, err)
-
-	readerWriter.AssertExpectations(t)
+	db.AssertExpectations(t)
 }

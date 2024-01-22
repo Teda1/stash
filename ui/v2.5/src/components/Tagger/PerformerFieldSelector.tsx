@@ -3,18 +3,17 @@ import React, { useState } from "react";
 import { Button, Row, Col } from "react-bootstrap";
 import { useIntl } from "react-intl";
 
-import { Modal, Icon } from "src/components/Shared";
-import { TextUtils } from "src/utils";
+import { ModalComponent } from "../Shared/Modal";
+import { Icon } from "../Shared/Icon";
+import { PERFORMER_FIELDS } from "./constants";
 
 interface IProps {
-  fields: string[];
   show: boolean;
   excludedFields: string[];
   onSelect: (fields: string[]) => void;
 }
 
 const PerformerFieldSelect: React.FC<IProps> = ({
-  fields,
   show,
   excludedFields,
   onSelect,
@@ -24,27 +23,27 @@ const PerformerFieldSelect: React.FC<IProps> = ({
     excludedFields.reduce((dict, field) => ({ ...dict, [field]: true }), {})
   );
 
-  const toggleField = (name: string) =>
+  const toggleField = (field: string) =>
     setExcluded({
       ...excluded,
-      [name]: !excluded[name],
+      [field]: !excluded[field],
     });
 
-  const renderField = (name: string) => (
-    <Col xs={6} className="mb-1" key={name}>
+  const renderField = (field: string) => (
+    <Col xs={6} className="mb-1" key={field}>
       <Button
-        onClick={() => toggleField(name)}
+        onClick={() => toggleField(field)}
         variant="secondary"
-        className={excluded[name] ? "text-muted" : "text-success"}
+        className={excluded[field] ? "text-muted" : "text-success"}
       >
-        <Icon icon={excluded[name] ? faTimes : faCheck} />
+        <Icon icon={excluded[field] ? faTimes : faCheck} />
       </Button>
-      <span className="ml-3">{TextUtils.capitalize(name)}</span>
+      <span className="ml-3">{intl.formatMessage({ id: field })}</span>
     </Col>
   );
 
   return (
-    <Modal
+    <ModalComponent
       show={show}
       icon={faList}
       dialogClassName="FieldSelect"
@@ -58,8 +57,8 @@ const PerformerFieldSelect: React.FC<IProps> = ({
       <div className="mb-2">
         These fields will be tagged by default. Click the button to toggle.
       </div>
-      <Row>{fields.map((f) => renderField(f))}</Row>
-    </Modal>
+      <Row>{PERFORMER_FIELDS.map((f) => renderField(f))}</Row>
+    </ModalComponent>
   );
 };
 

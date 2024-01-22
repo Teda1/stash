@@ -1,13 +1,14 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Link } from "react-router-dom";
 import * as GQL from "src/core/generated-graphql";
-import { TextUtils } from "src/utils";
-import { TagLink, TruncatedText } from "src/components/Shared";
+import TextUtils from "src/utils/text";
+import { GalleryLink, TagLink } from "src/components/Shared/TagLink";
+import { TruncatedText } from "src/components/Shared/TruncatedText";
 import { PerformerCard } from "src/components/Performers/PerformerCard";
-import { RatingStars } from "src/components/Scenes/SceneDetails/RatingStars";
+import { RatingSystem } from "src/components/Shared/Rating/RatingSystem";
 import { sortPerformers } from "src/core/performers";
-import { FormattedMessage, useIntl } from "react-intl";
-
+import { FormattedDate, FormattedMessage, useIntl } from "react-intl";
+import { objectTitle } from "src/core/files";
 interface IImageDetailProps {
   image: GQL.ImageDataFragment;
 }
@@ -15,10 +16,27 @@ interface IImageDetailProps {
 export const ImageDetailPanel: React.FC<IImageDetailProps> = (props) => {
   const intl = useIntl();
 
+  const file = useMemo(
+    () => (props.image.files.length > 0 ? props.image.files[0] : undefined),
+    [props.image]
+  );
+
+  function renderDetails() {
+    if (!props.image.details) return;
+    return (
+      <>
+        <h6>
+          <FormattedMessage id="details" />:{" "}
+        </h6>
+        <p className="pre">{props.image.details}</p>
+      </>
+    );
+  }
+
   function renderTags() {
     if (props.image.tags.length === 0) return;
     const tags = props.image.tags.map((tag) => (
-      <TagLink key={tag.id} tag={tag} tagType="image" />
+      <TagLink key={tag.id} tag={tag} linkType="image" />
     ));
     return (
       <>
@@ -37,7 +55,11 @@ export const ImageDetailPanel: React.FC<IImageDetailProps> = (props) => {
     if (props.image.performers.length === 0) return;
     const performers = sortPerformers(props.image.performers);
     const cards = performers.map((performer) => (
-      <PerformerCard key={performer.id} performer={performer} />
+      <PerformerCard
+        key={performer.id}
+        performer={performer}
+        ageFromDate={props.image.date ?? undefined}
+      />
     ));
 
     return (
@@ -57,8 +79,8 @@ export const ImageDetailPanel: React.FC<IImageDetailProps> = (props) => {
 
   function renderGalleries() {
     if (props.image.galleries.length === 0) return;
-    const tags = props.image.galleries.map((gallery) => (
-      <TagLink key={gallery.id} gallery={gallery} />
+    const galleries = props.image.galleries.map((gallery) => (
+      <GalleryLink key={gallery.id} gallery={gallery} />
     ));
     return (
       <>
@@ -68,7 +90,7 @@ export const ImageDetailPanel: React.FC<IImageDetailProps> = (props) => {
             values={{ count: props.image.galleries.length }}
           />
         </h6>
-        {tags}
+        {galleries}
       </>
     );
   }
@@ -82,30 +104,32 @@ export const ImageDetailPanel: React.FC<IImageDetailProps> = (props) => {
         <div className={`${imageDetailsWidth} col-xl-12 image-details`}>
           <div className="image-header d-xl-none">
             <h3>
-              <TruncatedText
-                text={
-                  props.image.title ??
-                  TextUtils.fileNameFromPath(props.image.path)
-                }
-              />
+              <TruncatedText text={objectTitle(props.image)} />
             </h3>
           </div>
-          {props.image.rating ? (
+          {props.image.date ? (
+            <h5>
+              <FormattedDate
+                value={props.image.date}
+                format="long"
+                timeZone="utc"
+              />
+            </h5>
+          ) : undefined}
+          {props.image.rating100 ? (
             <h6>
               <FormattedMessage id="rating" />:{" "}
-              <RatingStars value={props.image.rating} />
+              <RatingSystem value={props.image.rating100} disabled />
             </h6>
           ) : (
             ""
           )}
+
           {renderGalleries()}
-          {props.image.file.width && props.image.file.height ? (
+          {file?.width && file?.height ? (
             <h6>
               <FormattedMessage id="resolution" />:{" "}
-              {TextUtils.resolution(
-                props.image.file.width,
-                props.image.file.height
-              )}
+              {TextUtils.resolution(file.width, file.height)}
             </h6>
           ) : (
             ""
@@ -123,6 +147,16 @@ export const ImageDetailPanel: React.FC<IImageDetailProps> = (props) => {
               {TextUtils.formatDateTime(intl, props.image.updated_at)}{" "}
             </h6>
           }
+          {props.image.code && (
+            <h6>
+              <FormattedMessage id="scene_code" />: {props.image.code}{" "}
+            </h6>
+          )}
+          {props.image.photographer && (
+            <h6>
+              <FormattedMessage id="photographer" />: {props.image.photographer}{" "}
+            </h6>
+          )}
         </div>
         {props.image.studio && (
           <div className="col-3 d-xl-none">
@@ -138,6 +172,7 @@ export const ImageDetailPanel: React.FC<IImageDetailProps> = (props) => {
       </div>
       <div className="row">
         <div className="col-12">
+          {renderDetails()}
           {renderTags()}
           {renderPerformers()}
         </div>

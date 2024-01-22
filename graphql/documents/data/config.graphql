@@ -5,10 +5,14 @@ fragment ConfigGeneralData on ConfigGeneralResult {
     excludeImage
   }
   databasePath
+  backupDirectoryPath
   generatedPath
   metadataPath
   scrapersPath
+  pluginsPath
   cachePath
+  blobsPath
+  blobsStorage
   calculateMD5
   videoFileNamingAlgorithm
   parallelTasks
@@ -18,9 +22,11 @@ fragment ConfigGeneralData on ConfigGeneralResult {
   previewExcludeStart
   previewExcludeEnd
   previewPreset
+  transcodeHardwareAcceleration
   maxTranscodeSize
   maxStreamingTranscodeSize
   writeImageThumbnails
+  createImageClipsFromVideos
   apiKey
   username
   password
@@ -30,21 +36,35 @@ fragment ConfigGeneralData on ConfigGeneralResult {
   logLevel
   logAccess
   createGalleriesFromFolders
+  galleryCoverRegex
   videoExtensions
   imageExtensions
   galleryExtensions
   excludes
   imageExcludes
   customPerformerImageLocation
-  scraperUserAgent
-  scraperCertCheck
-  scraperCDPPath
   stashBoxes {
     name
     endpoint
     api_key
   }
   pythonPath
+  transcodeInputArgs
+  transcodeOutputArgs
+  liveTranscodeInputArgs
+  liveTranscodeOutputArgs
+  drawFunscriptHeatmapRange
+
+  scraperPackageSources {
+    name
+    url
+    local_path
+  }
+  pluginPackageSources {
+    name
+    url
+    local_path
+  }
 }
 
 fragment ConfigInterfaceData on ConfigInterfaceResult {
@@ -62,6 +82,10 @@ fragment ConfigInterfaceData on ConfigInterfaceResult {
   showStudioAsText
   css
   cssEnabled
+  javascript
+  javascriptEnabled
+  customLocales
+  customLocalesEnabled
   language
   imageLightbox {
     slideshowDelay
@@ -75,9 +99,11 @@ fragment ConfigInterfaceData on ConfigInterfaceResult {
     performer
     tag
     studio
+    movie
   }
   handyKey
   funscriptOffset
+  useStashHostedFunscript
 }
 
 fragment ConfigDLNAData on ConfigDLNAResult {
@@ -85,6 +111,7 @@ fragment ConfigDLNAData on ConfigDLNAResult {
   enabled
   whitelistedIPs
   interfaces
+  videoSortOrder
 }
 
 fragment ConfigScrapingData on ConfigScrapingResult {
@@ -107,6 +134,10 @@ fragment IdentifyMetadataOptionsData on IdentifyMetadataOptions {
   setCoverImage
   setOrganized
   includeMalePerformers
+  skipMultipleMatches
+  skipMultipleMatchTag
+  skipSingleNamePerformers
+  skipSingleNamePerformerTag
 }
 
 fragment ScraperSourceData on ScraperSource {
@@ -117,15 +148,15 @@ fragment ScraperSourceData on ScraperSource {
 
 fragment ConfigDefaultSettingsData on ConfigDefaultSettingsResult {
   scan {
-    useFileMetadata
-    stripFileExtension
+    scanGenerateCovers
     scanGeneratePreviews
     scanGenerateImagePreviews
     scanGenerateSprites
     scanGeneratePhashes
     scanGenerateThumbnails
+    scanGenerateClipPreviews
   }
-  
+
   identify {
     sources {
       source {
@@ -147,6 +178,7 @@ fragment ConfigDefaultSettingsData on ConfigDefaultSettingsResult {
   }
 
   generate {
+    covers
     sprites
     previews
     imagePreviews
@@ -163,6 +195,7 @@ fragment ConfigDefaultSettingsData on ConfigDefaultSettingsResult {
     transcodes
     phashes
     interactiveHeatmapsSpeeds
+    clipPreviews
   }
 
   deleteFile
@@ -186,4 +219,5 @@ fragment ConfigData on ConfigResult {
     ...ConfigDefaultSettingsData
   }
   ui
+  plugins
 }

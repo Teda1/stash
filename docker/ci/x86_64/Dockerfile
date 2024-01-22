@@ -11,8 +11,16 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm/v6" ];   then BIN=stash-linux-arm32v6; \
 
 FROM --platform=$TARGETPLATFORM alpine:latest AS app
 COPY --from=binary /stash /usr/bin/
-RUN apk add --no-cache ca-certificates python3 py3-requests py3-requests-toolbelt py3-lxml py3-pip ffmpeg vips-tools && pip install --no-cache-dir mechanicalsoup cloudscraper
-RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# vips version 8.15.0-r0 breaks thumbnail generation on arm32v6
+# need to use 8.14.3-r0 from alpine 3.18 instead
+
+RUN apk add --no-cache --virtual .build-deps gcc python3-dev musl-dev \
+    && apk add --no-cache ca-certificates python3 py3-requests py3-requests-toolbelt py3-lxml py3-pip ffmpeg ruby tzdata \
+    && apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/v3.18/community vips=8.14.3-r0 vips-tools=8.14.3-r0 \
+    && pip install --user --break-system-packages mechanicalsoup cloudscraper bencoder.pyx \
+    && gem install faraday \
+    && apk del .build-deps
 ENV STASH_CONFIG_FILE=/root/.stash/config.yml
 
 EXPOSE 9999

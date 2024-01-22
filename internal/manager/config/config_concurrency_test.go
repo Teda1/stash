@@ -7,7 +7,7 @@ import (
 
 // should be run with -race
 func TestConcurrentConfigAccess(t *testing.T) {
-	i := GetInstance()
+	i := InitializeEmpty()
 
 	const workers = 8
 	const loops = 200
@@ -16,16 +16,16 @@ func TestConcurrentConfigAccess(t *testing.T) {
 		wg.Add(1)
 		go func(wk int) {
 			for l := 0; l < loops; l++ {
-				if err := i.SetInitialMemoryConfig(); err != nil {
+				if err := i.SetInitialConfig(); err != nil {
 					t.Errorf("Failure setting initial configuration in worker %v iteration %v: %v", wk, l, err)
 				}
 
 				i.HasCredentials()
 				i.ValidateCredentials("", "")
-				i.GetCPUProfilePath()
 				i.GetConfigFile()
 				i.GetConfigPath()
 				i.GetDefaultDatabaseFilePath()
+				i.Set(BackupDirectoryPath, i.GetBackupDirectoryPath())
 				i.GetStashPaths()
 				_ = i.ValidateStashBoxes(nil)
 				_ = i.Validate()
@@ -85,8 +85,14 @@ func TestConcurrentConfigAccess(t *testing.T) {
 				i.Set(ImageLightboxSlideshowDelay, *i.GetImageLightboxOptions().SlideshowDelay)
 				i.GetCSSPath()
 				i.GetCSS()
+				i.GetJavascriptPath()
+				i.GetJavascript()
+				i.GetCustomLocalesPath()
+				i.GetCustomLocales()
 				i.Set(CSSEnabled, i.GetCSSEnabled())
+				i.Set(CSSEnabled, i.GetCustomLocalesEnabled())
 				i.Set(HandyKey, i.GetHandyKey())
+				i.Set(UseStashHostedFunscript, i.GetUseStashHostedFunscript())
 				i.Set(DLNAServerName, i.GetDLNAServerName())
 				i.Set(DLNADefaultEnabled, i.GetDLNADefaultEnabled())
 				i.Set(DLNADefaultIPWhitelist, i.GetDLNADefaultIPWhitelist())
@@ -105,7 +111,7 @@ func TestConcurrentConfigAccess(t *testing.T) {
 				i.Set(DisableDropdownCreatePerformer, i.GetDisableDropdownCreate().Performer)
 				i.Set(DisableDropdownCreateStudio, i.GetDisableDropdownCreate().Studio)
 				i.Set(DisableDropdownCreateTag, i.GetDisableDropdownCreate().Tag)
-				i.SetChecksumDefaultValues(i.GetVideoFileNamingAlgorithm(), i.IsCalculateMD5())
+				i.Set(DisableDropdownCreateMovie, i.GetDisableDropdownCreate().Movie)
 				i.Set(AutostartVideoOnPlaySelected, i.GetAutostartVideoOnPlaySelected())
 				i.Set(ContinuePlaylistDefault, i.GetContinuePlaylistDefault())
 				i.Set(PythonPath, i.GetPythonPath())

@@ -8,11 +8,23 @@ import {
   useAddTempDLNAIP,
   useRemoveTempDLNAIP,
 } from "src/core/StashService";
-import { useToast } from "src/hooks";
-import { DurationInput, Icon, LoadingIndicator, Modal } from "../Shared";
+import { useToast } from "src/hooks/Toast";
+import { DurationInput } from "../Shared/DurationInput";
+import { Icon } from "../Shared/Icon";
+import { LoadingIndicator } from "../Shared/LoadingIndicator";
+import { ModalComponent } from "../Shared/Modal";
 import { SettingSection } from "./SettingSection";
-import { BooleanSetting, StringListSetting, StringSetting } from "./Inputs";
-import { SettingStateContext } from "./context";
+import {
+  BooleanSetting,
+  StringListSetting,
+  StringSetting,
+  SelectSetting,
+} from "./Inputs";
+import { useSettings } from "./context";
+import {
+  videoSortOrderIntlMap,
+  defaultVideoSort,
+} from "src/utils/dlnaVideoSort";
 import {
   faClock,
   faTimes,
@@ -23,22 +35,16 @@ export const SettingsServicesPanel: React.FC = () => {
   const intl = useIntl();
   const Toast = useToast();
 
-  const { dlna, loading: configLoading, error, saveDLNA } = React.useContext(
-    SettingStateContext
-  );
+  const { dlna, loading: configLoading, error, saveDLNA } = useSettings();
 
   // undefined to hide dialog, true for enable, false for disable
-  const [enableDisable, setEnableDisable] = useState<boolean | undefined>(
-    undefined
-  );
+  const [enableDisable, setEnableDisable] = useState<boolean>();
 
   const [enableUntilRestart, setEnableUntilRestart] = useState<boolean>(false);
-  const [enableDuration, setEnableDuration] = useState<number | undefined>(
-    undefined
-  );
+  const [enableDuration, setEnableDuration] = useState<number>(0);
 
   const [ipEntry, setIPEntry] = useState<string>("");
-  const [tempIP, setTempIP] = useState<string | undefined>();
+  const [tempIP, setTempIP] = useState<string>();
 
   const { data: statusData, loading, refetch: statusRefetch } = useDLNAStatus();
 
@@ -62,18 +68,18 @@ export const SettingsServicesPanel: React.FC = () => {
     try {
       if (enableDisable) {
         await enableDLNA(input);
-        Toast.success({
-          content: intl.formatMessage({
+        Toast.success(
+          intl.formatMessage({
             id: "config.dlna.enabled_dlna_temporarily",
-          }),
-        });
+          })
+        );
       } else {
         await disableDLNA(input);
-        Toast.success({
-          content: intl.formatMessage({
+        Toast.success(
+          intl.formatMessage({
             id: "config.dlna.disabled_dlna_temporarily",
-          }),
-        });
+          })
+        );
       }
     } catch (e) {
       Toast.error(e);
@@ -99,11 +105,11 @@ export const SettingsServicesPanel: React.FC = () => {
 
     try {
       await addTempDLANIP(input);
-      Toast.success({
-        content: intl.formatMessage({
+      Toast.success(
+        intl.formatMessage({
           id: "config.dlna.allowed_ip_temporarily",
-        }),
-      });
+        })
+      );
     } catch (e) {
       Toast.error(e);
     } finally {
@@ -123,9 +129,7 @@ export const SettingsServicesPanel: React.FC = () => {
 
     try {
       await removeTempDLNAIP(input);
-      Toast.success({
-        content: intl.formatMessage({ id: "config.dlna.disallowed_ip" }),
-      });
+      Toast.success(intl.formatMessage({ id: "config.dlna.disallowed_ip" }));
     } catch (e) {
       Toast.error(e);
     } finally {
@@ -203,11 +207,11 @@ export const SettingsServicesPanel: React.FC = () => {
       } else {
         await disableDLNA(input);
       }
-      Toast.success({
-        content: intl.formatMessage({
+      Toast.success(
+        intl.formatMessage({
           id: "config.dlna.successfully_cancelled_temporary_behaviour",
-        }),
-      });
+        })
+      );
     } catch (e) {
       Toast.error(e);
     } finally {
@@ -233,7 +237,7 @@ export const SettingsServicesPanel: React.FC = () => {
     const capitalised = `${text[0].toUpperCase()}${text.slice(1)}`;
 
     return (
-      <Modal
+      <ModalComponent
         show={enableDisable !== undefined}
         header={capitalised}
         icon={faClock}
@@ -258,21 +262,21 @@ export const SettingsServicesPanel: React.FC = () => {
 
         <Form.Group id="temp-enable-duration">
           <DurationInput
-            numericValue={enableDuration ?? 0}
-            onValueChange={(v) => setEnableDuration(v ?? 0)}
+            value={enableDuration}
+            setValue={(v) => setEnableDuration(v ?? 0)}
             disabled={enableUntilRestart}
           />
           <Form.Text className="text-muted">
             Duration to {text} for - in minutes.
           </Form.Text>
         </Form.Group>
-      </Modal>
+      </ModalComponent>
     );
   }
 
   function renderTempWhitelistDialog() {
     return (
-      <Modal
+      <ModalComponent
         show={tempIP !== undefined}
         header={intl.formatMessage(
           { id: "config.dlna.allow_temp_ip" },
@@ -300,15 +304,15 @@ export const SettingsServicesPanel: React.FC = () => {
 
         <Form.Group id="temp-enable-duration">
           <DurationInput
-            numericValue={enableDuration ?? 0}
-            onValueChange={(v) => setEnableDuration(v ?? 0)}
+            value={enableDuration}
+            setValue={(v) => setEnableDuration(v ?? 0)}
             disabled={enableUntilRestart}
           />
           <Form.Text className="text-muted">
             Duration to allow for - in minutes.
           </Form.Text>
         </Form.Group>
-      </Modal>
+      </ModalComponent>
     );
   }
 
@@ -439,6 +443,22 @@ export const SettingsServicesPanel: React.FC = () => {
             value={dlna.whitelistedIPs ?? undefined}
             onChange={(v) => saveDLNA({ whitelistedIPs: v })}
           />
+
+          <SelectSetting
+            id="video-sort-order"
+            headingID="config.dlna.video_sort_order"
+            subHeadingID="config.dlna.video_sort_order_desc"
+            value={dlna.videoSortOrder ?? defaultVideoSort}
+            onChange={(v) => saveDLNA({ videoSortOrder: v })}
+          >
+            {Array.from(videoSortOrderIntlMap.entries()).map((v) => (
+              <option key={v[0]} value={v[0]}>
+                {intl.formatMessage({
+                  id: v[1],
+                })}
+              </option>
+            ))}
+          </SelectSetting>
         </SettingSection>
       </>
     );

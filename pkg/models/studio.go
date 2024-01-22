@@ -1,35 +1,62 @@
 package models
 
-type StudioReader interface {
-	Find(id int) (*Studio, error)
-	FindMany(ids []int) ([]*Studio, error)
-	FindChildren(id int) ([]*Studio, error)
-	FindByName(name string, nocase bool) (*Studio, error)
-	FindByStashID(stashID StashID) ([]*Studio, error)
-	Count() (int, error)
-	All() ([]*Studio, error)
-	// TODO - this interface is temporary until the filter schema can fully
-	// support the query needed
-	QueryForAutoTag(words []string) ([]*Studio, error)
-	Query(studioFilter *StudioFilterType, findFilter *FindFilterType) ([]*Studio, int, error)
-	GetImage(studioID int) ([]byte, error)
-	HasImage(studioID int) (bool, error)
-	GetStashIDs(studioID int) ([]*StashID, error)
-	GetAliases(studioID int) ([]string, error)
+type StudioFilterType struct {
+	And     *StudioFilterType     `json:"AND"`
+	Or      *StudioFilterType     `json:"OR"`
+	Not     *StudioFilterType     `json:"NOT"`
+	Name    *StringCriterionInput `json:"name"`
+	Details *StringCriterionInput `json:"details"`
+	// Filter to only include studios with this parent studio
+	Parents *MultiCriterionInput `json:"parents"`
+	// Filter by StashID
+	StashID *StringCriterionInput `json:"stash_id"`
+	// Filter by StashID Endpoint
+	StashIDEndpoint *StashIDCriterionInput `json:"stash_id_endpoint"`
+	// Filter to only include studios missing this property
+	IsMissing *string `json:"is_missing"`
+	// Filter by rating expressed as 1-100
+	Rating100 *IntCriterionInput `json:"rating100"`
+	// Filter by scene count
+	SceneCount *IntCriterionInput `json:"scene_count"`
+	// Filter by image count
+	ImageCount *IntCriterionInput `json:"image_count"`
+	// Filter by gallery count
+	GalleryCount *IntCriterionInput `json:"gallery_count"`
+	// Filter by url
+	URL *StringCriterionInput `json:"url"`
+	// Filter by studio aliases
+	Aliases *StringCriterionInput `json:"aliases"`
+	// Filter by autotag ignore value
+	IgnoreAutoTag *bool `json:"ignore_auto_tag"`
+	// Filter by created at
+	CreatedAt *TimestampCriterionInput `json:"created_at"`
+	// Filter by updated at
+	UpdatedAt *TimestampCriterionInput `json:"updated_at"`
 }
 
-type StudioWriter interface {
-	Create(newStudio Studio) (*Studio, error)
-	Update(updatedStudio StudioPartial) (*Studio, error)
-	UpdateFull(updatedStudio Studio) (*Studio, error)
-	Destroy(id int) error
-	UpdateImage(studioID int, image []byte) error
-	DestroyImage(studioID int) error
-	UpdateStashIDs(studioID int, stashIDs []StashID) error
-	UpdateAliases(studioID int, aliases []string) error
+type StudioCreateInput struct {
+	Name     string  `json:"name"`
+	URL      *string `json:"url"`
+	ParentID *string `json:"parent_id"`
+	// This should be a URL or a base64 encoded data URL
+	Image         *string   `json:"image"`
+	StashIds      []StashID `json:"stash_ids"`
+	Rating100     *int      `json:"rating100"`
+	Details       *string   `json:"details"`
+	Aliases       []string  `json:"aliases"`
+	IgnoreAutoTag *bool     `json:"ignore_auto_tag"`
 }
 
-type StudioReaderWriter interface {
-	StudioReader
-	StudioWriter
+type StudioUpdateInput struct {
+	ID       string  `json:"id"`
+	Name     *string `json:"name"`
+	URL      *string `json:"url"`
+	ParentID *string `json:"parent_id"`
+	// This should be a URL or a base64 encoded data URL
+	Image         *string   `json:"image"`
+	StashIds      []StashID `json:"stash_ids"`
+	Rating100     *int      `json:"rating100"`
+	Details       *string   `json:"details"`
+	Aliases       []string  `json:"aliases"`
+	IgnoreAutoTag *bool     `json:"ignore_auto_tag"`
 }

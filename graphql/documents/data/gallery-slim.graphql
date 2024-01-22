@@ -1,24 +1,33 @@
 fragment SlimGalleryData on Gallery {
   id
-  checksum
-  path
   title
+  code
   date
-  url
+  urls
   details
-  rating
+  photographer
+  rating100
   organized
+  files {
+    ...GalleryFileData
+  }
+  folder {
+    ...FolderData
+  }
   image_count
   cover {
-    file {
-      size
-      width
-      height
+    id
+    files {
+      ...ImageFileData
     }
-    
     paths {
       thumbnail
     }
+  }
+  chapters {
+    id
+    title
+    image_index
   }
   studio {
     id
@@ -37,8 +46,6 @@ fragment SlimGalleryData on Gallery {
     image_path
   }
   scenes {
-    id
-    title
-    path
+    ...SlimSceneData
   }
 }

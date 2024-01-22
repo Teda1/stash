@@ -3,13 +3,14 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/stashapp/stash/pkg/models"
 )
 
-func (r *mutationResolver) SaveFilter(ctx context.Context, input models.SaveFilterInput) (ret *models.SavedFilter, err error) {
+func (r *mutationResolver) SaveFilter(ctx context.Context, input SaveFilterInput) (ret *models.SavedFilter, err error) {
 	if strings.TrimSpace(input.Name) == "" {
 		return nil, errors.New("name must be non-empty")
 	}
@@ -18,23 +19,31 @@ func (r *mutationResolver) SaveFilter(ctx context.Context, input models.SaveFilt
 	if input.ID != nil {
 		idv, err := strconv.Atoi(*input.ID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("converting id: %w", err)
 		}
 		id = &idv
 	}
 
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.SavedFilter
+
 		f := models.SavedFilter{
-			Mode:   input.Mode,
-			Name:   input.Name,
-			Filter: input.Filter,
+			Mode:         input.Mode,
+			Name:         input.Name,
+			FindFilter:   input.FindFilter,
+			ObjectFilter: input.ObjectFilter,
+			UIOptions:    input.UIOptions,
 		}
+
 		if id == nil {
-			ret, err = repo.SavedFilter().Create(f)
+			err = qb.Create(ctx, &f)
+			ret = &f
 		} else {
 			f.ID = *id
-			ret, err = repo.SavedFilter().Update(f)
+			err = qb.Update(ctx, &f)
+			ret = &f
 		}
+
 		return err
 	}); err != nil {
 		return nil, err
@@ -42,14 +51,14 @@ func (r *mutationResolver) SaveFilter(ctx context.Context, input models.SaveFilt
 	return ret, err
 }
 
-func (r *mutationResolver) DestroySavedFilter(ctx context.Context, input models.DestroyFilterInput) (bool, error) {
+func (r *mutationResolver) DestroySavedFilter(ctx context.Context, input DestroyFilterInput) (bool, error) {
 	id, err := strconv.Atoi(input.ID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("converting id: %w", err)
 	}
 
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
-		return repo.SavedFilter().Destroy(id)
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		return r.repository.SavedFilter.Destroy(ctx, id)
 	}); err != nil {
 		return false, err
 	}
@@ -57,30 +66,30 @@ func (r *mutationResolver) DestroySavedFilter(ctx context.Context, input models.
 	return true, nil
 }
 
-func (r *mutationResolver) SetDefaultFilter(ctx context.Context, input models.SetDefaultFilterInput) (bool, error) {
-	if err := r.withTxn(ctx, func(repo models.Repository) error {
-		qb := repo.SavedFilter()
+func (r *mutationResolver) SetDefaultFilter(ctx context.Context, input SetDefaultFilterInput) (bool, error) {
+	if err := r.withTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.SavedFilter
 
-		if input.Filter == nil {
+		if input.FindFilter == nil && input.ObjectFilter == nil && input.UIOptions == nil {
 			// clearing
-			def, err := qb.FindDefault(input.Mode)
+			def, err := qb.FindDefault(ctx, input.Mode)
 			if err != nil {
 				return err
 			}
 
 			if def != nil {
-				return qb.Destroy(def.ID)
+				return qb.Destroy(ctx, def.ID)
 			}
 
 			return nil
 		}
 
-		_, err := qb.SetDefault(models.SavedFilter{
-			Mode:   input.Mode,
-			Filter: *input.Filter,
+		return qb.SetDefault(ctx, &models.SavedFilter{
+			Mode:         input.Mode,
+			FindFilter:   input.FindFilter,
+			ObjectFilter: input.ObjectFilter,
+			UIOptions:    input.UIOptions,
 		})
-
-		return err
 	}); err != nil {
 		return false, err
 	}

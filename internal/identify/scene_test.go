@@ -1,7 +1,6 @@
 package identify
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"strconv"
@@ -9,36 +8,40 @@ import (
 
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/models/mocks"
+	"github.com/stashapp/stash/pkg/scraper"
 	"github.com/stashapp/stash/pkg/utils"
 	"github.com/stretchr/testify/mock"
 )
 
 func Test_sceneRelationships_studio(t *testing.T) {
 	validStoredID := "1"
-	var validStoredIDInt int64 = 1
+	remoteSiteID := "2"
+	var validStoredIDInt = 1
 	invalidStoredID := "invalidStoredID"
 	createMissing := true
 
-	defaultOptions := &models.IdentifyFieldOptionsInput{
-		Strategy: models.IdentifyFieldStrategyMerge,
+	defaultOptions := &FieldOptions{
+		Strategy: FieldStrategyMerge,
 	}
 
-	repo := mocks.NewTransactionManager()
-	repo.StudioMock().On("Create", mock.Anything).Return(&models.Studio{
-		ID: int(validStoredIDInt),
-	}, nil)
+	db := mocks.NewDatabase()
+
+	db.Studio.On("Create", testCtx, mock.Anything).Run(func(args mock.Arguments) {
+		s := args.Get(1).(*models.Studio)
+		s.ID = validStoredIDInt
+	}).Return(nil)
 
 	tr := sceneRelationships{
-		repo:         repo,
-		fieldOptions: make(map[string]*models.IdentifyFieldOptionsInput),
+		studioReaderWriter: db.Studio,
+		fieldOptions:       make(map[string]*FieldOptions),
 	}
 
 	tests := []struct {
 		name         string
 		scene        *models.Scene
-		fieldOptions *models.IdentifyFieldOptionsInput
+		fieldOptions *FieldOptions
 		result       *models.ScrapedStudio
-		want         *int64
+		want         *int
 		wantErr      bool
 	}{
 		{
@@ -52,8 +55,8 @@ func Test_sceneRelationships_studio(t *testing.T) {
 		{
 			"ignore",
 			&models.Scene{},
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyIgnore,
+			&FieldOptions{
+				Strategy: FieldStrategyIgnore,
 			},
 			&models.ScrapedStudio{
 				StoredID: &validStoredID,
@@ -74,7 +77,7 @@ func Test_sceneRelationships_studio(t *testing.T) {
 		{
 			"same stored id",
 			&models.Scene{
-				StudioID: models.NullInt64(validStoredIDInt),
+				StudioID: &validStoredIDInt,
 			},
 			defaultOptions,
 			&models.ScrapedStudio{
@@ -104,11 +107,11 @@ func Test_sceneRelationships_studio(t *testing.T) {
 		{
 			"create missing",
 			&models.Scene{},
-			&models.IdentifyFieldOptionsInput{
-				Strategy:      models.IdentifyFieldStrategyMerge,
+			&FieldOptions{
+				Strategy:      FieldStrategyMerge,
 				CreateMissing: &createMissing,
 			},
-			&models.ScrapedStudio{},
+			&models.ScrapedStudio{RemoteSiteID: &remoteSiteID},
 			&validStoredIDInt,
 			false,
 		},
@@ -118,12 +121,15 @@ func Test_sceneRelationships_studio(t *testing.T) {
 			tr.scene = tt.scene
 			tr.fieldOptions["studio"] = tt.fieldOptions
 			tr.result = &scrapeResult{
-				result: &models.ScrapedScene{
+				source: ScraperSource{
+					RemoteSite: "endpoint",
+				},
+				result: &scraper.ScrapedScene{
 					Studio: tt.result,
 				},
 			}
 
-			got, err := tr.studio()
+			got, err := tr.studio(testCtx)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("sceneRelationships.studio() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -151,24 +157,35 @@ func Test_sceneRelationships_performers(t *testing.T) {
 	female := models.GenderEnumFemale.String()
 	male := models.GenderEnumMale.String()
 
-	defaultOptions := &models.IdentifyFieldOptionsInput{
-		Strategy: models.IdentifyFieldStrategyMerge,
+	defaultOptions := &FieldOptions{
+		Strategy: FieldStrategyMerge,
 	}
 
-	repo := mocks.NewTransactionManager()
-	repo.SceneMock().On("GetPerformerIDs", sceneID).Return(nil, nil)
-	repo.SceneMock().On("GetPerformerIDs", sceneWithPerformerID).Return([]int{existingPerformerID}, nil)
-	repo.SceneMock().On("GetPerformerIDs", errSceneID).Return(nil, errors.New("error getting IDs"))
+	emptyScene := &models.Scene{
+		ID:           sceneID,
+		PerformerIDs: models.NewRelatedIDs([]int{}),
+		TagIDs:       models.NewRelatedIDs([]int{}),
+		StashIDs:     models.NewRelatedStashIDs([]models.StashID{}),
+	}
+
+	sceneWithPerformer := &models.Scene{
+		ID: sceneWithPerformerID,
+		PerformerIDs: models.NewRelatedIDs([]int{
+			existingPerformerID,
+		}),
+	}
+
+	db := mocks.NewDatabase()
 
 	tr := sceneRelationships{
-		repo:         repo,
-		fieldOptions: make(map[string]*models.IdentifyFieldOptionsInput),
+		sceneReader:  db.Scene,
+		fieldOptions: make(map[string]*FieldOptions),
 	}
 
 	tests := []struct {
 		name         string
-		sceneID      int
-		fieldOptions *models.IdentifyFieldOptionsInput
+		scene        *models.Scene
+		fieldOptions *FieldOptions
 		scraped      []*models.ScrapedPerformer
 		ignoreMale   bool
 		want         []int
@@ -176,9 +193,9 @@ func Test_sceneRelationships_performers(t *testing.T) {
 	}{
 		{
 			"ignore",
-			sceneID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyIgnore,
+			emptyScene,
+			&FieldOptions{
+				Strategy: FieldStrategyIgnore,
 			},
 			[]*models.ScrapedPerformer{
 				{
@@ -191,7 +208,7 @@ func Test_sceneRelationships_performers(t *testing.T) {
 		},
 		{
 			"none",
-			sceneID,
+			emptyScene,
 			defaultOptions,
 			[]*models.ScrapedPerformer{},
 			false,
@@ -199,19 +216,8 @@ func Test_sceneRelationships_performers(t *testing.T) {
 			false,
 		},
 		{
-			"error getting ids",
-			errSceneID,
-			defaultOptions,
-			[]*models.ScrapedPerformer{
-				{},
-			},
-			false,
-			nil,
-			true,
-		},
-		{
 			"merge existing",
-			sceneWithPerformerID,
+			sceneWithPerformer,
 			defaultOptions,
 			[]*models.ScrapedPerformer{
 				{
@@ -225,7 +231,7 @@ func Test_sceneRelationships_performers(t *testing.T) {
 		},
 		{
 			"merge add",
-			sceneWithPerformerID,
+			sceneWithPerformer,
 			defaultOptions,
 			[]*models.ScrapedPerformer{
 				{
@@ -239,7 +245,7 @@ func Test_sceneRelationships_performers(t *testing.T) {
 		},
 		{
 			"ignore male",
-			sceneID,
+			emptyScene,
 			defaultOptions,
 			[]*models.ScrapedPerformer{
 				{
@@ -254,9 +260,9 @@ func Test_sceneRelationships_performers(t *testing.T) {
 		},
 		{
 			"overwrite",
-			sceneWithPerformerID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyOverwrite,
+			sceneWithPerformer,
+			&FieldOptions{
+				Strategy: FieldStrategyOverwrite,
 			},
 			[]*models.ScrapedPerformer{
 				{
@@ -270,9 +276,9 @@ func Test_sceneRelationships_performers(t *testing.T) {
 		},
 		{
 			"ignore male (not male)",
-			sceneWithPerformerID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyOverwrite,
+			sceneWithPerformer,
+			&FieldOptions{
+				Strategy: FieldStrategyOverwrite,
 			},
 			[]*models.ScrapedPerformer{
 				{
@@ -287,9 +293,9 @@ func Test_sceneRelationships_performers(t *testing.T) {
 		},
 		{
 			"error getting tag ID",
-			sceneID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy:      models.IdentifyFieldStrategyOverwrite,
+			emptyScene,
+			&FieldOptions{
+				Strategy:      FieldStrategyOverwrite,
 				CreateMissing: &createMissing,
 			},
 			[]*models.ScrapedPerformer{
@@ -305,17 +311,15 @@ func Test_sceneRelationships_performers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tr.scene = &models.Scene{
-				ID: tt.sceneID,
-			}
+			tr.scene = tt.scene
 			tr.fieldOptions["performers"] = tt.fieldOptions
 			tr.result = &scrapeResult{
-				result: &models.ScrapedScene{
+				result: &scraper.ScrapedScene{
 					Performers: tt.scraped,
 				},
 			}
 
-			got, err := tr.performers(tt.ignoreMale)
+			got, err := tr.performers(testCtx, tt.ignoreMale)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("sceneRelationships.performers() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -342,42 +346,57 @@ func Test_sceneRelationships_tags(t *testing.T) {
 	validName := "validName"
 	invalidName := "invalidName"
 
-	defaultOptions := &models.IdentifyFieldOptionsInput{
-		Strategy: models.IdentifyFieldStrategyMerge,
+	defaultOptions := &FieldOptions{
+		Strategy: FieldStrategyMerge,
 	}
 
-	repo := mocks.NewTransactionManager()
-	repo.SceneMock().On("GetTagIDs", sceneID).Return(nil, nil)
-	repo.SceneMock().On("GetTagIDs", sceneWithTagID).Return([]int{existingID}, nil)
-	repo.SceneMock().On("GetTagIDs", errSceneID).Return(nil, errors.New("error getting IDs"))
+	emptyScene := &models.Scene{
+		ID:           sceneID,
+		TagIDs:       models.NewRelatedIDs([]int{}),
+		PerformerIDs: models.NewRelatedIDs([]int{}),
+		StashIDs:     models.NewRelatedStashIDs([]models.StashID{}),
+	}
 
-	repo.TagMock().On("Create", mock.MatchedBy(func(p models.Tag) bool {
+	sceneWithTag := &models.Scene{
+		ID: sceneWithTagID,
+		TagIDs: models.NewRelatedIDs([]int{
+			existingID,
+		}),
+		PerformerIDs: models.NewRelatedIDs([]int{}),
+		StashIDs:     models.NewRelatedStashIDs([]models.StashID{}),
+	}
+
+	db := mocks.NewDatabase()
+
+	db.Tag.On("Create", testCtx, mock.MatchedBy(func(p *models.Tag) bool {
 		return p.Name == validName
-	})).Return(&models.Tag{
-		ID: validStoredIDInt,
-	}, nil)
-	repo.TagMock().On("Create", mock.MatchedBy(func(p models.Tag) bool {
+	})).Run(func(args mock.Arguments) {
+		t := args.Get(1).(*models.Tag)
+		t.ID = validStoredIDInt
+	}).Return(nil)
+	db.Tag.On("Create", testCtx, mock.MatchedBy(func(p *models.Tag) bool {
 		return p.Name == invalidName
-	})).Return(nil, errors.New("error creating tag"))
+	})).Return(errors.New("error creating tag"))
 
 	tr := sceneRelationships{
-		repo:         repo,
-		fieldOptions: make(map[string]*models.IdentifyFieldOptionsInput),
+		sceneReader:  db.Scene,
+		tagCreator:   db.Tag,
+		fieldOptions: make(map[string]*FieldOptions),
 	}
 
 	tests := []struct {
 		name         string
-		sceneID      int
-		fieldOptions *models.IdentifyFieldOptionsInput
+		scene        *models.Scene
+		fieldOptions *FieldOptions
 		scraped      []*models.ScrapedTag
 		want         []int
 		wantErr      bool
 	}{
 		{
 			"ignore",
-			sceneID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyIgnore,
+			emptyScene,
+			&FieldOptions{
+				Strategy: FieldStrategyIgnore,
 			},
 			[]*models.ScrapedTag{
 				{
@@ -389,25 +408,15 @@ func Test_sceneRelationships_tags(t *testing.T) {
 		},
 		{
 			"none",
-			sceneID,
+			emptyScene,
 			defaultOptions,
 			[]*models.ScrapedTag{},
 			nil,
 			false,
 		},
 		{
-			"error getting ids",
-			errSceneID,
-			defaultOptions,
-			[]*models.ScrapedTag{
-				{},
-			},
-			nil,
-			true,
-		},
-		{
 			"merge existing",
-			sceneWithTagID,
+			sceneWithTag,
 			defaultOptions,
 			[]*models.ScrapedTag{
 				{
@@ -420,7 +429,7 @@ func Test_sceneRelationships_tags(t *testing.T) {
 		},
 		{
 			"merge add",
-			sceneWithTagID,
+			sceneWithTag,
 			defaultOptions,
 			[]*models.ScrapedTag{
 				{
@@ -433,9 +442,9 @@ func Test_sceneRelationships_tags(t *testing.T) {
 		},
 		{
 			"overwrite",
-			sceneWithTagID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyOverwrite,
+			sceneWithTag,
+			&FieldOptions{
+				Strategy: FieldStrategyOverwrite,
 			},
 			[]*models.ScrapedTag{
 				{
@@ -448,9 +457,9 @@ func Test_sceneRelationships_tags(t *testing.T) {
 		},
 		{
 			"error getting tag ID",
-			sceneID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyOverwrite,
+			emptyScene,
+			&FieldOptions{
+				Strategy: FieldStrategyOverwrite,
 			},
 			[]*models.ScrapedTag{
 				{
@@ -463,9 +472,9 @@ func Test_sceneRelationships_tags(t *testing.T) {
 		},
 		{
 			"create missing",
-			sceneID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy:      models.IdentifyFieldStrategyOverwrite,
+			emptyScene,
+			&FieldOptions{
+				Strategy:      FieldStrategyOverwrite,
 				CreateMissing: &createMissing,
 			},
 			[]*models.ScrapedTag{
@@ -478,9 +487,9 @@ func Test_sceneRelationships_tags(t *testing.T) {
 		},
 		{
 			"error creating",
-			sceneID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy:      models.IdentifyFieldStrategyOverwrite,
+			emptyScene,
+			&FieldOptions{
+				Strategy:      FieldStrategyOverwrite,
 				CreateMissing: &createMissing,
 			},
 			[]*models.ScrapedTag{
@@ -494,17 +503,15 @@ func Test_sceneRelationships_tags(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tr.scene = &models.Scene{
-				ID: tt.sceneID,
-			}
+			tr.scene = tt.scene
 			tr.fieldOptions["tags"] = tt.fieldOptions
 			tr.result = &scrapeResult{
-				result: &models.ScrapedScene{
+				result: &scraper.ScrapedScene{
 					Tags: tt.scraped,
 				},
 			}
 
-			got, err := tr.tags()
+			got, err := tr.tags(testCtx)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("sceneRelationships.tags() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -529,29 +536,35 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 	remoteSiteID := "remoteSiteID"
 	newRemoteSiteID := "newRemoteSiteID"
 
-	defaultOptions := &models.IdentifyFieldOptionsInput{
-		Strategy: models.IdentifyFieldStrategyMerge,
+	defaultOptions := &FieldOptions{
+		Strategy: FieldStrategyMerge,
 	}
 
-	repo := mocks.NewTransactionManager()
-	repo.SceneMock().On("GetStashIDs", sceneID).Return(nil, nil)
-	repo.SceneMock().On("GetStashIDs", sceneWithStashID).Return([]*models.StashID{
-		{
-			StashID:  remoteSiteID,
-			Endpoint: existingEndpoint,
-		},
-	}, nil)
-	repo.SceneMock().On("GetStashIDs", errSceneID).Return(nil, errors.New("error getting IDs"))
+	emptyScene := &models.Scene{
+		ID: sceneID,
+	}
+
+	sceneWithStashIDs := &models.Scene{
+		ID: sceneWithStashID,
+		StashIDs: models.NewRelatedStashIDs([]models.StashID{
+			{
+				StashID:  remoteSiteID,
+				Endpoint: existingEndpoint,
+			},
+		}),
+	}
+
+	db := mocks.NewDatabase()
 
 	tr := sceneRelationships{
-		repo:         repo,
-		fieldOptions: make(map[string]*models.IdentifyFieldOptionsInput),
+		sceneReader:  db.Scene,
+		fieldOptions: make(map[string]*FieldOptions),
 	}
 
 	tests := []struct {
 		name         string
-		sceneID      int
-		fieldOptions *models.IdentifyFieldOptionsInput
+		scene        *models.Scene
+		fieldOptions *FieldOptions
 		endpoint     string
 		remoteSiteID *string
 		want         []models.StashID
@@ -559,9 +572,9 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 	}{
 		{
 			"ignore",
-			sceneID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyIgnore,
+			emptyScene,
+			&FieldOptions{
+				Strategy: FieldStrategyIgnore,
 			},
 			newEndpoint,
 			&remoteSiteID,
@@ -570,7 +583,7 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 		},
 		{
 			"no endpoint",
-			sceneID,
+			emptyScene,
 			defaultOptions,
 			"",
 			&remoteSiteID,
@@ -579,7 +592,7 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 		},
 		{
 			"no site id",
-			sceneID,
+			emptyScene,
 			defaultOptions,
 			newEndpoint,
 			nil,
@@ -587,17 +600,8 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 			false,
 		},
 		{
-			"error getting ids",
-			errSceneID,
-			defaultOptions,
-			newEndpoint,
-			&remoteSiteID,
-			nil,
-			true,
-		},
-		{
 			"merge existing",
-			sceneWithStashID,
+			sceneWithStashIDs,
 			defaultOptions,
 			existingEndpoint,
 			&remoteSiteID,
@@ -606,7 +610,7 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 		},
 		{
 			"merge existing new value",
-			sceneWithStashID,
+			sceneWithStashIDs,
 			defaultOptions,
 			existingEndpoint,
 			&newRemoteSiteID,
@@ -620,7 +624,7 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 		},
 		{
 			"merge add",
-			sceneWithStashID,
+			sceneWithStashIDs,
 			defaultOptions,
 			newEndpoint,
 			&newRemoteSiteID,
@@ -638,9 +642,9 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 		},
 		{
 			"overwrite",
-			sceneWithStashID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyOverwrite,
+			sceneWithStashIDs,
+			&FieldOptions{
+				Strategy: FieldStrategyOverwrite,
 			},
 			newEndpoint,
 			&newRemoteSiteID,
@@ -654,9 +658,9 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 		},
 		{
 			"overwrite same",
-			sceneWithStashID,
-			&models.IdentifyFieldOptionsInput{
-				Strategy: models.IdentifyFieldStrategyOverwrite,
+			sceneWithStashIDs,
+			&FieldOptions{
+				Strategy: FieldStrategyOverwrite,
 			},
 			existingEndpoint,
 			&remoteSiteID,
@@ -666,26 +670,24 @@ func Test_sceneRelationships_stashIDs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tr.scene = &models.Scene{
-				ID: tt.sceneID,
-			}
+			tr.scene = tt.scene
 			tr.fieldOptions["stash_ids"] = tt.fieldOptions
 			tr.result = &scrapeResult{
 				source: ScraperSource{
 					RemoteSite: tt.endpoint,
 				},
-				result: &models.ScrapedScene{
+				result: &scraper.ScrapedScene{
 					RemoteSiteID: tt.remoteSiteID,
 				},
 			}
 
-			got, err := tr.stashIDs()
+			got, err := tr.stashIDs(testCtx)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("sceneRelationships.stashIDs() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("sceneRelationships.stashIDs() = %v, want %v", got, tt.want)
+				t.Errorf("sceneRelationships.stashIDs() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
@@ -706,13 +708,14 @@ func Test_sceneRelationships_cover(t *testing.T) {
 	newDataEncoded := base64Prefix + utils.GetBase64StringFromData(newData)
 	invalidData := newDataEncoded + "!!!"
 
-	repo := mocks.NewTransactionManager()
-	repo.SceneMock().On("GetCover", sceneID).Return(existingData, nil)
-	repo.SceneMock().On("GetCover", errSceneID).Return(nil, errors.New("error getting cover"))
+	db := mocks.NewDatabase()
+
+	db.Scene.On("GetCover", testCtx, sceneID).Return(existingData, nil)
+	db.Scene.On("GetCover", testCtx, errSceneID).Return(nil, errors.New("error getting cover"))
 
 	tr := sceneRelationships{
-		repo:         repo,
-		fieldOptions: make(map[string]*models.IdentifyFieldOptionsInput),
+		sceneReader:  db.Scene,
+		fieldOptions: make(map[string]*FieldOptions),
 	}
 
 	tests := []struct {
@@ -747,8 +750,8 @@ func Test_sceneRelationships_cover(t *testing.T) {
 			"error getting scene cover",
 			errSceneID,
 			&newDataEncoded,
-			nil,
-			true,
+			newData,
+			false,
 		},
 		{
 			"invalid data",
@@ -764,12 +767,12 @@ func Test_sceneRelationships_cover(t *testing.T) {
 				ID: tt.sceneID,
 			}
 			tr.result = &scrapeResult{
-				result: &models.ScrapedScene{
+				result: &scraper.ScrapedScene{
 					Image: tt.image,
 				},
 			}
 
-			got, err := tr.cover(context.TODO())
+			got, err := tr.cover(testCtx)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("sceneRelationships.cover() error = %v, wantErr %v", err, tt.wantErr)
 				return

@@ -13,13 +13,13 @@ import (
 	"golang.org/x/text/collate"
 )
 
-func (r *queryResolver) Configuration(ctx context.Context) (*models.ConfigResult, error) {
+func (r *queryResolver) Configuration(ctx context.Context) (*ConfigResult, error) {
 	return makeConfigResult(), nil
 }
 
-func (r *queryResolver) Directory(ctx context.Context, path, locale *string) (*models.Directory, error) {
+func (r *queryResolver) Directory(ctx context.Context, path, locale *string) (*Directory, error) {
 
-	directory := &models.Directory{}
+	directory := &Directory{}
 	var err error
 
 	col := newCollator(locale, collate.IgnoreCase, collate.Numeric)
@@ -50,7 +50,7 @@ func getDir(path string) string {
 }
 
 func getParent(path string) *string {
-	isRoot := path[len(path)-1:] == "/"
+	isRoot := path == "/"
 	if isRoot {
 		return nil
 	} else {
@@ -59,8 +59,8 @@ func getParent(path string) *string {
 	}
 }
 
-func makeConfigResult() *models.ConfigResult {
-	return &models.ConfigResult{
+func makeConfigResult() *ConfigResult {
+	return &ConfigResult{
 		General:   makeConfigGeneralResult(),
 		Interface: makeConfigInterfaceResult(),
 		Dlna:      makeConfigDLNAResult(),
@@ -70,7 +70,7 @@ func makeConfigResult() *models.ConfigResult {
 	}
 }
 
-func makeConfigGeneralResult() *models.ConfigGeneralResult {
+func makeConfigGeneralResult() *ConfigGeneralResult {
 	config := config.GetInstance()
 	logFile := config.GetLogFile()
 
@@ -79,53 +79,61 @@ func makeConfigGeneralResult() *models.ConfigGeneralResult {
 
 	customPerformerImageLocation := config.GetCustomPerformerImageLocation()
 
-	scraperUserAgent := config.GetScraperUserAgent()
-	scraperCDPPath := config.GetScraperCDPPath()
-
-	return &models.ConfigGeneralResult{
-		Stashes:                      config.GetStashPaths(),
-		DatabasePath:                 config.GetDatabasePath(),
-		GeneratedPath:                config.GetGeneratedPath(),
-		MetadataPath:                 config.GetMetadataPath(),
-		ConfigFilePath:               config.GetConfigFile(),
-		ScrapersPath:                 config.GetScrapersPath(),
-		CachePath:                    config.GetCachePath(),
-		CalculateMd5:                 config.IsCalculateMD5(),
-		VideoFileNamingAlgorithm:     config.GetVideoFileNamingAlgorithm(),
-		ParallelTasks:                config.GetParallelTasks(),
-		PreviewAudio:                 config.GetPreviewAudio(),
-		PreviewSegments:              config.GetPreviewSegments(),
-		PreviewSegmentDuration:       config.GetPreviewSegmentDuration(),
-		PreviewExcludeStart:          config.GetPreviewExcludeStart(),
-		PreviewExcludeEnd:            config.GetPreviewExcludeEnd(),
-		PreviewPreset:                config.GetPreviewPreset(),
-		MaxTranscodeSize:             &maxTranscodeSize,
-		MaxStreamingTranscodeSize:    &maxStreamingTranscodeSize,
-		WriteImageThumbnails:         config.IsWriteImageThumbnails(),
-		APIKey:                       config.GetAPIKey(),
-		Username:                     config.GetUsername(),
-		Password:                     config.GetPasswordHash(),
-		MaxSessionAge:                config.GetMaxSessionAge(),
-		LogFile:                      &logFile,
-		LogOut:                       config.GetLogOut(),
-		LogLevel:                     config.GetLogLevel(),
-		LogAccess:                    config.GetLogAccess(),
-		VideoExtensions:              config.GetVideoExtensions(),
-		ImageExtensions:              config.GetImageExtensions(),
-		GalleryExtensions:            config.GetGalleryExtensions(),
-		CreateGalleriesFromFolders:   config.GetCreateGalleriesFromFolders(),
-		Excludes:                     config.GetExcludes(),
-		ImageExcludes:                config.GetImageExcludes(),
-		CustomPerformerImageLocation: &customPerformerImageLocation,
-		ScraperUserAgent:             &scraperUserAgent,
-		ScraperCertCheck:             config.GetScraperCertCheck(),
-		ScraperCDPPath:               &scraperCDPPath,
-		StashBoxes:                   config.GetStashBoxes(),
-		PythonPath:                   config.GetPythonPath(),
+	return &ConfigGeneralResult{
+		Stashes:                       config.GetStashPaths(),
+		DatabasePath:                  config.GetDatabasePath(),
+		BackupDirectoryPath:           config.GetBackupDirectoryPath(),
+		GeneratedPath:                 config.GetGeneratedPath(),
+		MetadataPath:                  config.GetMetadataPath(),
+		ConfigFilePath:                config.GetConfigFile(),
+		ScrapersPath:                  config.GetScrapersPath(),
+		PluginsPath:                   config.GetPluginsPath(),
+		CachePath:                     config.GetCachePath(),
+		BlobsPath:                     config.GetBlobsPath(),
+		BlobsStorage:                  config.GetBlobsStorage(),
+		CalculateMd5:                  config.IsCalculateMD5(),
+		VideoFileNamingAlgorithm:      config.GetVideoFileNamingAlgorithm(),
+		ParallelTasks:                 config.GetParallelTasks(),
+		PreviewAudio:                  config.GetPreviewAudio(),
+		PreviewSegments:               config.GetPreviewSegments(),
+		PreviewSegmentDuration:        config.GetPreviewSegmentDuration(),
+		PreviewExcludeStart:           config.GetPreviewExcludeStart(),
+		PreviewExcludeEnd:             config.GetPreviewExcludeEnd(),
+		PreviewPreset:                 config.GetPreviewPreset(),
+		TranscodeHardwareAcceleration: config.GetTranscodeHardwareAcceleration(),
+		MaxTranscodeSize:              &maxTranscodeSize,
+		MaxStreamingTranscodeSize:     &maxStreamingTranscodeSize,
+		WriteImageThumbnails:          config.IsWriteImageThumbnails(),
+		CreateImageClipsFromVideos:    config.IsCreateImageClipsFromVideos(),
+		GalleryCoverRegex:             config.GetGalleryCoverRegex(),
+		APIKey:                        config.GetAPIKey(),
+		Username:                      config.GetUsername(),
+		Password:                      config.GetPasswordHash(),
+		MaxSessionAge:                 config.GetMaxSessionAge(),
+		LogFile:                       &logFile,
+		LogOut:                        config.GetLogOut(),
+		LogLevel:                      config.GetLogLevel(),
+		LogAccess:                     config.GetLogAccess(),
+		VideoExtensions:               config.GetVideoExtensions(),
+		ImageExtensions:               config.GetImageExtensions(),
+		GalleryExtensions:             config.GetGalleryExtensions(),
+		CreateGalleriesFromFolders:    config.GetCreateGalleriesFromFolders(),
+		Excludes:                      config.GetExcludes(),
+		ImageExcludes:                 config.GetImageExcludes(),
+		CustomPerformerImageLocation:  &customPerformerImageLocation,
+		StashBoxes:                    config.GetStashBoxes(),
+		PythonPath:                    config.GetPythonPath(),
+		TranscodeInputArgs:            config.GetTranscodeInputArgs(),
+		TranscodeOutputArgs:           config.GetTranscodeOutputArgs(),
+		LiveTranscodeInputArgs:        config.GetLiveTranscodeInputArgs(),
+		LiveTranscodeOutputArgs:       config.GetLiveTranscodeOutputArgs(),
+		DrawFunscriptHeatmapRange:     config.GetDrawFunscriptHeatmapRange(),
+		ScraperPackageSources:         config.GetScraperPackageSources(),
+		PluginPackageSources:          config.GetPluginPackageSources(),
 	}
 }
 
-func makeConfigInterfaceResult() *models.ConfigInterfaceResult {
+func makeConfigInterfaceResult() *ConfigInterfaceResult {
 	config := config.GetInstance()
 	menuItems := config.GetMenuItems()
 	soundOnPreview := config.GetSoundOnPreview()
@@ -141,15 +149,18 @@ func makeConfigInterfaceResult() *models.ConfigInterfaceResult {
 	showStudioAsText := config.GetShowStudioAsText()
 	css := config.GetCSS()
 	cssEnabled := config.GetCSSEnabled()
+	javascript := config.GetJavascript()
+	javascriptEnabled := config.GetJavascriptEnabled()
+	customLocales := config.GetCustomLocales()
+	customLocalesEnabled := config.GetCustomLocalesEnabled()
 	language := config.GetLanguage()
 	handyKey := config.GetHandyKey()
 	scriptOffset := config.GetFunscriptOffset()
+	useStashHostedFunscript := config.GetUseStashHostedFunscript()
 	imageLightboxOptions := config.GetImageLightboxOptions()
-
-	// FIXME - misnamed output field means we have redundant fields
 	disableDropdownCreate := config.GetDisableDropdownCreate()
 
-	return &models.ConfigInterfaceResult{
+	return &ConfigInterfaceResult{
 		MenuItems:                    menuItems,
 		SoundOnPreview:               &soundOnPreview,
 		WallShowTitle:                &wallShowTitle,
@@ -164,37 +175,41 @@ func makeConfigInterfaceResult() *models.ConfigInterfaceResult {
 		ContinuePlaylistDefault:      &continuePlaylistDefault,
 		CSS:                          &css,
 		CSSEnabled:                   &cssEnabled,
+		Javascript:                   &javascript,
+		JavascriptEnabled:            &javascriptEnabled,
+		CustomLocales:                &customLocales,
+		CustomLocalesEnabled:         &customLocalesEnabled,
 		Language:                     &language,
 
 		ImageLightbox: &imageLightboxOptions,
 
-		// FIXME - see above
-		DisabledDropdownCreate: disableDropdownCreate,
-		DisableDropdownCreate:  disableDropdownCreate,
+		DisableDropdownCreate: disableDropdownCreate,
 
-		HandyKey:        &handyKey,
-		FunscriptOffset: &scriptOffset,
+		HandyKey:                &handyKey,
+		FunscriptOffset:         &scriptOffset,
+		UseStashHostedFunscript: &useStashHostedFunscript,
 	}
 }
 
-func makeConfigDLNAResult() *models.ConfigDLNAResult {
+func makeConfigDLNAResult() *ConfigDLNAResult {
 	config := config.GetInstance()
 
-	return &models.ConfigDLNAResult{
+	return &ConfigDLNAResult{
 		ServerName:     config.GetDLNAServerName(),
 		Enabled:        config.GetDLNADefaultEnabled(),
 		WhitelistedIPs: config.GetDLNADefaultIPWhitelist(),
 		Interfaces:     config.GetDLNAInterfaces(),
+		VideoSortOrder: config.GetVideoSortOrder(),
 	}
 }
 
-func makeConfigScrapingResult() *models.ConfigScrapingResult {
+func makeConfigScrapingResult() *ConfigScrapingResult {
 	config := config.GetInstance()
 
 	scraperUserAgent := config.GetScraperUserAgent()
 	scraperCDPPath := config.GetScraperCDPPath()
 
-	return &models.ConfigScrapingResult{
+	return &ConfigScrapingResult{
 		ScraperUserAgent:   &scraperUserAgent,
 		ScraperCertCheck:   config.GetScraperCertCheck(),
 		ScraperCDPPath:     &scraperCDPPath,
@@ -202,12 +217,12 @@ func makeConfigScrapingResult() *models.ConfigScrapingResult {
 	}
 }
 
-func makeConfigDefaultsResult() *models.ConfigDefaultSettingsResult {
+func makeConfigDefaultsResult() *ConfigDefaultSettingsResult {
 	config := config.GetInstance()
 	deleteFileDefault := config.GetDeleteFileDefault()
 	deleteGeneratedDefault := config.GetDeleteGeneratedDefault()
 
-	return &models.ConfigDefaultSettingsResult{
+	return &ConfigDefaultSettingsResult{
 		Identify:        config.GetDefaultIdentifySettings(),
 		Scan:            config.GetDefaultScanSettings(),
 		AutoTag:         config.GetDefaultAutoTagSettings(),
@@ -221,8 +236,10 @@ func makeConfigUIResult() map[string]interface{} {
 	return config.GetInstance().GetUIConfiguration()
 }
 
-func (r *queryResolver) ValidateStashBoxCredentials(ctx context.Context, input models.StashBoxInput) (*models.StashBoxValidationResult, error) {
-	client := stashbox.NewClient(models.StashBox{Endpoint: input.Endpoint, APIKey: input.APIKey}, r.txnManager)
+func (r *queryResolver) ValidateStashBoxCredentials(ctx context.Context, input config.StashBoxInput) (*StashBoxValidationResult, error) {
+	box := models.StashBox{Endpoint: input.Endpoint, APIKey: input.APIKey}
+	client := stashbox.NewClient(box, r.stashboxRepository())
+
 	user, err := client.GetUser(ctx)
 
 	valid := user != nil && user.Me != nil
@@ -248,7 +265,7 @@ func (r *queryResolver) ValidateStashBoxCredentials(ctx context.Context, input m
 		}
 	}
 
-	result := models.StashBoxValidationResult{
+	result := StashBoxValidationResult{
 		Valid:  valid,
 		Status: status,
 	}

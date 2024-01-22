@@ -1,23 +1,43 @@
 import React from "react";
-import { getISOCountry } from "src/utils";
+import { useIntl } from "react-intl";
+import { getCountryByISO } from "src/utils/country";
+import { OverlayTrigger, Tooltip } from "react-bootstrap";
 
 interface ICountryFlag {
   country?: string | null;
   className?: string;
+  includeName?: boolean;
+  includeOverlay?: boolean;
 }
 
-const CountryFlag: React.FC<ICountryFlag> = ({ className, country }) => {
-  const ISOCountry = getISOCountry(country);
-  if (!ISOCountry?.code) return <></>;
+export const CountryFlag: React.FC<ICountryFlag> = ({
+  className,
+  country: isoCountry,
+  includeName,
+  includeOverlay,
+}) => {
+  const { locale } = useIntl();
+
+  const country = getCountryByISO(isoCountry, locale);
+
+  if (!isoCountry || !country) return <></>;
 
   return (
-    <span
-      className={`${
-        className ?? ""
-      } flag-icon flag-icon-${ISOCountry.code.toLowerCase()}`}
-      title={ISOCountry.name}
-    />
+    <>
+      {includeName ? country : ""}
+      {includeOverlay ? (
+        <OverlayTrigger
+          overlay={<Tooltip id="{country}-tooltip">{country}</Tooltip>}
+        >
+          <span
+            className={`${className ?? ""} fi fi-${isoCountry.toLowerCase()}`}
+          />
+        </OverlayTrigger>
+      ) : (
+        <span
+          className={`${className ?? ""} fi fi-${isoCountry.toLowerCase()}`}
+        />
+      )}
+    </>
   );
 };
-
-export default CountryFlag;

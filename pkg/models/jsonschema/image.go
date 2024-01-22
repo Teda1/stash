@@ -5,29 +5,44 @@ import (
 	"os"
 
 	jsoniter "github.com/json-iterator/go"
+	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/models/json"
 )
 
-type ImageFile struct {
-	ModTime json.JSONTime `json:"mod_time,omitempty"`
-	Size    int           `json:"size"`
-	Width   int           `json:"width"`
-	Height  int           `json:"height"`
+type Image struct {
+	Title  string `json:"title,omitempty"`
+	Code   string `json:"code,omitempty"`
+	Studio string `json:"studio,omitempty"`
+	Rating int    `json:"rating,omitempty"`
+
+	// deprecated - for import only
+	URL string `json:"url,omitempty"`
+
+	URLs         []string      `json:"urls,omitempty"`
+	Date         string        `json:"date,omitempty"`
+	Details      string        `json:"details,omitempty"`
+	Photographer string        `json:"photographer,omitempty"`
+	Organized    bool          `json:"organized,omitempty"`
+	OCounter     int           `json:"o_counter,omitempty"`
+	Galleries    []GalleryRef  `json:"galleries,omitempty"`
+	Performers   []string      `json:"performers,omitempty"`
+	Tags         []string      `json:"tags,omitempty"`
+	Files        []string      `json:"files,omitempty"`
+	CreatedAt    json.JSONTime `json:"created_at,omitempty"`
+	UpdatedAt    json.JSONTime `json:"updated_at,omitempty"`
 }
 
-type Image struct {
-	Title      string        `json:"title,omitempty"`
-	Checksum   string        `json:"checksum,omitempty"`
-	Studio     string        `json:"studio,omitempty"`
-	Rating     int           `json:"rating,omitempty"`
-	Organized  bool          `json:"organized,omitempty"`
-	OCounter   int           `json:"o_counter,omitempty"`
-	Galleries  []string      `json:"galleries,omitempty"`
-	Performers []string      `json:"performers,omitempty"`
-	Tags       []string      `json:"tags,omitempty"`
-	File       *ImageFile    `json:"file,omitempty"`
-	CreatedAt  json.JSONTime `json:"created_at,omitempty"`
-	UpdatedAt  json.JSONTime `json:"updated_at,omitempty"`
+func (s Image) Filename(basename string, hash string) string {
+	ret := fsutil.SanitiseBasename(s.Title)
+	if ret == "" {
+		ret = basename
+	}
+
+	if hash != "" {
+		ret += "." + hash
+	}
+
+	return ret + ".json"
 }
 
 func LoadImageFile(filePath string) (*Image, error) {

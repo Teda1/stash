@@ -2,13 +2,17 @@ import {
   createMandatoryNumberCriterionOption,
   createMandatoryStringCriterionOption,
   createStringCriterionOption,
+  createMandatoryTimestampCriterionOption,
+  createDateCriterionOption,
 } from "./criteria/criterion";
 import { PerformerFavoriteCriterionOption } from "./criteria/favorite";
 import { ImageIsMissingCriterionOption } from "./criteria/is-missing";
 import { OrganizedCriterionOption } from "./criteria/organized";
+import { PathCriterionOption } from "./criteria/path";
 import { PerformersCriterionOption } from "./criteria/performers";
 import { RatingCriterionOption } from "./criteria/rating";
 import { ResolutionCriterionOption } from "./criteria/resolution";
+import { OrientationCriterionOption } from "./criteria/orientation";
 import { StudiosCriterionOption } from "./criteria/studios";
 import {
   PerformerTagsCriterionOption,
@@ -19,28 +23,40 @@ import { DisplayMode } from "./types";
 
 const defaultSortBy = "path";
 
-const sortByOptions = ["o_counter", "filesize", ...MediaSortByOptions].map(
-  ListFilterOptions.createSortBy
-);
+const sortByOptions = [
+  "o_counter",
+  "filesize",
+  "file_count",
+  "date",
+  ...MediaSortByOptions,
+].map(ListFilterOptions.createSortBy);
 
 const displayModeOptions = [DisplayMode.Grid, DisplayMode.Wall];
 const criterionOptions = [
   createStringCriterionOption("title"),
+  createStringCriterionOption("code", "scene_code"),
+  createStringCriterionOption("details"),
+  createStringCriterionOption("photographer"),
   createMandatoryStringCriterionOption("checksum", "media_info.checksum"),
-  createMandatoryStringCriterionOption("path"),
-  RatingCriterionOption,
+  PathCriterionOption,
   OrganizedCriterionOption,
   createMandatoryNumberCriterionOption("o_counter"),
   ResolutionCriterionOption,
+  OrientationCriterionOption,
   ImageIsMissingCriterionOption,
   TagsCriterionOption,
+  RatingCriterionOption,
   createMandatoryNumberCriterionOption("tag_count"),
   PerformerTagsCriterionOption,
   PerformersCriterionOption,
   createMandatoryNumberCriterionOption("performer_count"),
-  createMandatoryNumberCriterionOption("performer_age"),
   PerformerFavoriteCriterionOption,
   StudiosCriterionOption,
+  createStringCriterionOption("url"),
+  createDateCriterionOption("date"),
+  createMandatoryNumberCriterionOption("file_count"),
+  createMandatoryTimestampCriterionOption("created_at"),
+  createMandatoryTimestampCriterionOption("updated_at"),
 ];
 export const ImageListFilterOptions = new ListFilterOptions(
   defaultSortBy,

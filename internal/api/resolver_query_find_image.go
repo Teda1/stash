@@ -6,14 +6,14 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/stashapp/stash/pkg/models"
-	"github.com/stashapp/stash/pkg/sliceutil/stringslice"
+	"github.com/stashapp/stash/pkg/sliceutil"
 )
 
 func (r *queryResolver) FindImage(ctx context.Context, id *string, checksum *string) (*models.Image, error) {
 	var image *models.Image
 
-	if err := r.withReadTxn(ctx, func(repo models.ReaderRepository) error {
-		qb := repo.Image()
+	if err := r.withReadTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.Image
 		var err error
 
 		if id != nil {
@@ -22,12 +22,20 @@ func (r *queryResolver) FindImage(ctx context.Context, id *string, checksum *str
 				return err
 			}
 
-			image, err = qb.Find(idInt)
+			image, err = qb.Find(ctx, idInt)
 			if err != nil {
 				return err
 			}
 		} else if checksum != nil {
-			image, err = qb.FindByChecksum(*checksum)
+			var images []*models.Image
+			images, err = qb.FindByChecksum(ctx, *checksum)
+			if err != nil {
+				return err
+			}
+
+			if len(images) > 0 {
+				image = images[0]
+			}
 		}
 
 		return err
@@ -38,31 +46,31 @@ func (r *queryResolver) FindImage(ctx context.Context, id *string, checksum *str
 	return image, nil
 }
 
-func (r *queryResolver) FindImages(ctx context.Context, imageFilter *models.ImageFilterType, imageIds []int, filter *models.FindFilterType) (ret *models.FindImagesResultType, err error) {
-	if err := r.withReadTxn(ctx, func(repo models.ReaderRepository) error {
-		qb := repo.Image()
+func (r *queryResolver) FindImages(ctx context.Context, imageFilter *models.ImageFilterType, imageIds []int, filter *models.FindFilterType) (ret *FindImagesResultType, err error) {
+	if err := r.withReadTxn(ctx, func(ctx context.Context) error {
+		qb := r.repository.Image
 
 		fields := graphql.CollectAllFields(ctx)
 
-		result, err := qb.Query(models.ImageQueryOptions{
+		result, err := qb.Query(ctx, models.ImageQueryOptions{
 			QueryOptions: models.QueryOptions{
 				FindFilter: filter,
-				Count:      stringslice.StrInclude(fields, "count"),
+				Count:      sliceutil.Contains(fields, "count"),
 			},
 			ImageFilter: imageFilter,
-			Megapixels:  stringslice.StrInclude(fields, "megapixels"),
-			TotalSize:   stringslice.StrInclude(fields, "filesize"),
+			Megapixels:  sliceutil.Contains(fields, "megapixels"),
+			TotalSize:   sliceutil.Contains(fields, "filesize"),
 		})
 		if err != nil {
 			return err
 		}
 
-		images, err := result.Resolve()
+		images, err := result.Resolve(ctx)
 		if err != nil {
 			return err
 		}
 
-		ret = &models.FindImagesResultType{
+		ret = &FindImagesResultType{
 			Count:      result.Count,
 			Images:     images,
 			Megapixels: result.Megapixels,
@@ -70,6 +78,17 @@ func (r *queryResolver) FindImages(ctx context.Context, imageFilter *models.Imag
 		}
 
 		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return ret, nil
+}
+
+func (r *queryResolver) AllImages(ctx context.Context) (ret []*models.Image, err error) {
+	if err := r.withReadTxn(ctx, func(ctx context.Context) error {
+		ret, err = r.repository.Image.All(ctx)
+		return err
 	}); err != nil {
 		return nil, err
 	}

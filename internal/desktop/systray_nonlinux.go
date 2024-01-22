@@ -1,5 +1,4 @@
-//go:build windows || darwin
-// +build windows darwin
+//go:build (windows || darwin) && cgo
 
 package desktop
 
@@ -7,13 +6,15 @@ import (
 	"strings"
 
 	"github.com/kermieisinthehouse/systray"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"github.com/stashapp/stash/internal/manager/config"
 	"github.com/stashapp/stash/pkg/logger"
 )
 
 // MUST be run on the main goroutine or will have no effect on macOS
-func startSystray(shutdownHandler ShutdownHandler, faviconProvider FaviconProvider) {
-
+func startSystray(exit chan int, faviconProvider FaviconProvider) {
 	// Shows a small notification to inform that Stash will no longer show a terminal window,
 	// and instead will be available in the tray. Will only show the first time a pre-desktop integration
 	// system is started from a non-terminal method, e.g. double-clicking an icon.
@@ -22,7 +23,7 @@ func startSystray(shutdownHandler ShutdownHandler, faviconProvider FaviconProvid
 		SendNotification("Stash has moved!", "Stash now runs in your tray, instead of a terminal window.")
 		c.Set(config.ShowOneTimeMovedNotification, false)
 		if err := c.Write(); err != nil {
-			logger.Errorf("Error while writing configuration file: %s", err.Error())
+			logger.Errorf("Error while writing configuration file: %v", err)
 		}
 	}
 
@@ -36,14 +37,19 @@ func startSystray(shutdownHandler ShutdownHandler, faviconProvider FaviconProvid
 	// 	}
 	// }()
 
-	for {
-		systray.Run(func() {
-			systrayInitialize(shutdownHandler, faviconProvider)
-		}, nil)
-	}
+	// "intercept" an exit code to quit the systray, allowing the call to systray.Run() below to return.
+	go func() {
+		exitCode := <-exit
+		systray.Quit()
+		exit <- exitCode
+	}()
+
+	systray.Run(func() {
+		systrayInitialize(exit, faviconProvider)
+	}, nil)
 }
 
-func systrayInitialize(shutdownHandler ShutdownHandler, faviconProvider FaviconProvider) {
+func systrayInitialize(exit chan<- int, faviconProvider FaviconProvider) {
 	favicon := faviconProvider.GetFavicon()
 	systray.SetTemplateIcon(favicon, favicon)
 	systray.SetTooltip("🟢 Stash is Running.")
@@ -55,7 +61,8 @@ func systrayInitialize(shutdownHandler ShutdownHandler, faviconProvider FaviconP
 	if !c.IsNewSystem() {
 		menuItems = c.GetMenuItems()
 		for _, item := range menuItems {
-			titleCaseItem := strings.Title(strings.ToLower(item))
+			c := cases.Title(language.Und)
+			titleCaseItem := c.String(strings.ToLower(item))
 			curr := systray.AddMenuItem(titleCaseItem, "Open to "+titleCaseItem)
 			go func(item string) {
 				for {
@@ -83,8 +90,8 @@ func systrayInitialize(shutdownHandler ShutdownHandler, faviconProvider FaviconP
 			case <-openStashButton.ClickedCh:
 				openURLInBrowser("")
 			case <-quitStashButton.ClickedCh:
-				systray.Quit()
-				shutdownHandler.Shutdown(0)
+				exit <- 0
+				return
 			}
 		}
 	}()

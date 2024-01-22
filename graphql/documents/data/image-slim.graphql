@@ -1,27 +1,34 @@
 fragment SlimImageData on Image {
   id
-  checksum
   title
-  rating
+  code
+  date
+  urls
+  details
+  photographer
+  rating100
   organized
   o_counter
-  path
 
-  file {
-    size
-    width
-    height
+  files {
+    ...ImageFileData
   }
 
   paths {
     thumbnail
+    preview
     image
   }
 
   galleries {
     id
-    path
     title
+    files {
+      path
+    }
+    folder {
+      path
+    }
   }
 
   studio {
@@ -41,5 +48,9 @@ fragment SlimImageData on Image {
     gender
     favorite
     image_path
+  }
+
+  visual_files {
+    ...VisualFileData
   }
 }

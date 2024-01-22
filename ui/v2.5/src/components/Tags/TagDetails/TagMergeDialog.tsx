@@ -1,11 +1,12 @@
 import { Form, Col, Row } from "react-bootstrap";
 import React, { useState } from "react";
 import * as GQL from "src/core/generated-graphql";
-import { Modal, TagSelect } from "src/components/Shared";
-import { FormUtils } from "src/utils";
+import { ModalComponent } from "src/components/Shared/Modal";
+import { TagSelect } from "src/components/Shared/Select";
+import * as FormUtils from "src/utils/form";
 import { useTagsMerge } from "src/core/StashService";
 import { useIntl } from "react-intl";
-import { useToast } from "src/hooks";
+import { useToast } from "src/hooks/Toast";
 import { useHistory } from "react-router-dom";
 import { faSignInAlt, faSignOutAlt } from "@fortawesome/free-solid-svg-icons";
 
@@ -51,9 +52,7 @@ export const TagMergeModal: React.FC<ITagMergeModalProps> = ({
         },
       });
       if (result.data?.tagsMerge) {
-        Toast.success({
-          content: intl.formatMessage({ id: "toast.merged_tags" }),
-        });
+        Toast.success(intl.formatMessage({ id: "toast.merged_tags" }));
         onClose();
         history.push(`/tags/${destination}`);
       }
@@ -72,7 +71,7 @@ export const TagMergeModal: React.FC<ITagMergeModalProps> = ({
   }
 
   return (
-    <Modal
+    <ModalComponent
       show={show}
       header={title}
       icon={mergeType === "from" ? faSignInAlt : faSignOutAlt}
@@ -135,6 +134,6 @@ export const TagMergeModal: React.FC<ITagMergeModalProps> = ({
           )}
         </div>
       </div>
-    </Modal>
+    </ModalComponent>
   );
 };

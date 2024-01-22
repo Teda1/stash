@@ -1,6 +1,7 @@
 package autotag
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stashapp/stash/pkg/models"
@@ -11,6 +12,21 @@ import (
 
 const galleryExt = "zip"
 
+var testCtx = context.Background()
+
+// returns got == expected
+// ignores expected.UpdatedAt, but ensures that got.UpdatedAt is set and not null
+func galleryPartialsEqual(got, expected models.GalleryPartial) bool {
+	// updated at should be set and not null
+	if !got.UpdatedAt.Set || got.UpdatedAt.Null {
+		return false
+	}
+	// else ignore the exact value
+	got.UpdatedAt = models.OptionalTime{}
+
+	return assert.ObjectsAreEqual(got, expected)
+}
+
 func TestGalleryPerformers(t *testing.T) {
 	t.Parallel()
 
@@ -18,15 +34,17 @@ func TestGalleryPerformers(t *testing.T) {
 	const performerName = "performer name"
 	const performerID = 2
 	performer := models.Performer{
-		ID:   performerID,
-		Name: models.NullString(performerName),
+		ID:      performerID,
+		Name:    performerName,
+		Aliases: models.NewRelatedStrings([]string{}),
 	}
 
 	const reversedPerformerName = "name performer"
 	const reversedPerformerID = 3
 	reversedPerformer := models.Performer{
-		ID:   reversedPerformerID,
-		Name: models.NullString(reversedPerformerName),
+		ID:      reversedPerformerID,
+		Name:    reversedPerformerName,
+		Aliases: models.NewRelatedStrings([]string{}),
 	}
 
 	testTables := generateTestTable(performerName, galleryExt)
@@ -34,26 +52,34 @@ func TestGalleryPerformers(t *testing.T) {
 	assert := assert.New(t)
 
 	for _, test := range testTables {
-		mockPerformerReader := &mocks.PerformerReaderWriter{}
-		mockGalleryReader := &mocks.GalleryReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockPerformerReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockPerformerReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Performer{&performer, &reversedPerformer}, nil).Once()
+		db.Performer.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Performer.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Performer{&performer, &reversedPerformer}, nil).Once()
 
 		if test.Matches {
-			mockGalleryReader.On("GetPerformerIDs", galleryID).Return(nil, nil).Once()
-			mockGalleryReader.On("UpdatePerformers", galleryID, []int{performerID}).Return(nil).Once()
+			matchPartial := mock.MatchedBy(func(got models.GalleryPartial) bool {
+				expected := models.GalleryPartial{
+					PerformerIDs: &models.UpdateIDs{
+						IDs:  []int{performerID},
+						Mode: models.RelationshipUpdateModeAdd,
+					},
+				}
+
+				return galleryPartialsEqual(got, expected)
+			})
+			db.Gallery.On("UpdatePartial", testCtx, galleryID, matchPartial).Return(nil, nil).Once()
 		}
 
 		gallery := models.Gallery{
-			ID:   galleryID,
-			Path: models.NullString(test.Path),
+			ID:           galleryID,
+			Path:         test.Path,
+			PerformerIDs: models.NewRelatedIDs([]int{}),
 		}
-		err := GalleryPerformers(&gallery, mockGalleryReader, mockPerformerReader, nil)
+		err := GalleryPerformers(testCtx, &gallery, db.Gallery, db.Performer, nil)
 
 		assert.Nil(err)
-		mockPerformerReader.AssertExpectations(t)
-		mockGalleryReader.AssertExpectations(t)
+		db.AssertExpectations(t)
 	}
 }
 
@@ -62,71 +88,70 @@ func TestGalleryStudios(t *testing.T) {
 
 	const galleryID = 1
 	const studioName = "studio name"
-	const studioID = 2
+	var studioID = 2
 	studio := models.Studio{
 		ID:   studioID,
-		Name: models.NullString(studioName),
+		Name: studioName,
 	}
 
 	const reversedStudioName = "name studio"
 	const reversedStudioID = 3
 	reversedStudio := models.Studio{
 		ID:   reversedStudioID,
-		Name: models.NullString(reversedStudioName),
+		Name: reversedStudioName,
 	}
 
 	testTables := generateTestTable(studioName, galleryExt)
 
 	assert := assert.New(t)
 
-	doTest := func(mockStudioReader *mocks.StudioReaderWriter, mockGalleryReader *mocks.GalleryReaderWriter, test pathTestTable) {
+	doTest := func(db *mocks.Database, test pathTestTable) {
 		if test.Matches {
-			mockGalleryReader.On("Find", galleryID).Return(&models.Gallery{}, nil).Once()
-			expectedStudioID := models.NullInt64(studioID)
-			mockGalleryReader.On("UpdatePartial", models.GalleryPartial{
-				ID:       galleryID,
-				StudioID: &expectedStudioID,
-			}).Return(nil, nil).Once()
+			matchPartial := mock.MatchedBy(func(got models.GalleryPartial) bool {
+				expected := models.GalleryPartial{
+					StudioID: models.NewOptionalInt(studioID),
+				}
+
+				return galleryPartialsEqual(got, expected)
+			})
+			db.Gallery.On("UpdatePartial", testCtx, galleryID, matchPartial).Return(nil, nil).Once()
 		}
 
 		gallery := models.Gallery{
 			ID:   galleryID,
-			Path: models.NullString(test.Path),
+			Path: test.Path,
 		}
-		err := GalleryStudios(&gallery, mockGalleryReader, mockStudioReader, nil)
+		err := GalleryStudios(testCtx, &gallery, db.Gallery, db.Studio, nil)
 
 		assert.Nil(err)
-		mockStudioReader.AssertExpectations(t)
-		mockGalleryReader.AssertExpectations(t)
+		db.AssertExpectations(t)
 	}
 
 	for _, test := range testTables {
-		mockStudioReader := &mocks.StudioReaderWriter{}
-		mockGalleryReader := &mocks.GalleryReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockStudioReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockStudioReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
-		mockStudioReader.On("GetAliases", mock.Anything).Return([]string{}, nil).Maybe()
+		db.Studio.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Studio.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
+		db.Studio.On("GetAliases", testCtx, mock.Anything).Return([]string{}, nil).Maybe()
 
-		doTest(mockStudioReader, mockGalleryReader, test)
+		doTest(db, test)
 	}
 
 	// test against aliases
 	const unmatchedName = "unmatched"
-	studio.Name.String = unmatchedName
+	studio.Name = unmatchedName
 
 	for _, test := range testTables {
-		mockStudioReader := &mocks.StudioReaderWriter{}
-		mockGalleryReader := &mocks.GalleryReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockStudioReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockStudioReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
-		mockStudioReader.On("GetAliases", studioID).Return([]string{
+		db.Studio.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Studio.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Studio{&studio, &reversedStudio}, nil).Once()
+		db.Studio.On("GetAliases", testCtx, studioID).Return([]string{
 			studioName,
 		}, nil).Once()
-		mockStudioReader.On("GetAliases", reversedStudioID).Return([]string{}, nil).Once()
+		db.Studio.On("GetAliases", testCtx, reversedStudioID).Return([]string{}, nil).Once()
 
-		doTest(mockStudioReader, mockGalleryReader, test)
+		doTest(db, test)
 	}
 }
 
@@ -152,48 +177,55 @@ func TestGalleryTags(t *testing.T) {
 
 	assert := assert.New(t)
 
-	doTest := func(mockTagReader *mocks.TagReaderWriter, mockGalleryReader *mocks.GalleryReaderWriter, test pathTestTable) {
+	doTest := func(db *mocks.Database, test pathTestTable) {
 		if test.Matches {
-			mockGalleryReader.On("GetTagIDs", galleryID).Return(nil, nil).Once()
-			mockGalleryReader.On("UpdateTags", galleryID, []int{tagID}).Return(nil).Once()
+			matchPartial := mock.MatchedBy(func(got models.GalleryPartial) bool {
+				expected := models.GalleryPartial{
+					TagIDs: &models.UpdateIDs{
+						IDs:  []int{tagID},
+						Mode: models.RelationshipUpdateModeAdd,
+					},
+				}
+
+				return galleryPartialsEqual(got, expected)
+			})
+			db.Gallery.On("UpdatePartial", testCtx, galleryID, matchPartial).Return(nil, nil).Once()
 		}
 
 		gallery := models.Gallery{
-			ID:   galleryID,
-			Path: models.NullString(test.Path),
+			ID:     galleryID,
+			Path:   test.Path,
+			TagIDs: models.NewRelatedIDs([]int{}),
 		}
-		err := GalleryTags(&gallery, mockGalleryReader, mockTagReader, nil)
+		err := GalleryTags(testCtx, &gallery, db.Gallery, db.Tag, nil)
 
 		assert.Nil(err)
-		mockTagReader.AssertExpectations(t)
-		mockGalleryReader.AssertExpectations(t)
+		db.AssertExpectations(t)
 	}
 
 	for _, test := range testTables {
-		mockTagReader := &mocks.TagReaderWriter{}
-		mockGalleryReader := &mocks.GalleryReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockTagReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockTagReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
-		mockTagReader.On("GetAliases", mock.Anything).Return([]string{}, nil).Maybe()
+		db.Tag.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Tag.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
+		db.Tag.On("GetAliases", testCtx, mock.Anything).Return([]string{}, nil).Maybe()
 
-		doTest(mockTagReader, mockGalleryReader, test)
+		doTest(db, test)
 	}
 
 	const unmatchedName = "unmatched"
 	tag.Name = unmatchedName
 
 	for _, test := range testTables {
-		mockTagReader := &mocks.TagReaderWriter{}
-		mockGalleryReader := &mocks.GalleryReaderWriter{}
+		db := mocks.NewDatabase()
 
-		mockTagReader.On("Query", mock.Anything, mock.Anything).Return(nil, 0, nil)
-		mockTagReader.On("QueryForAutoTag", mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
-		mockTagReader.On("GetAliases", tagID).Return([]string{
+		db.Tag.On("Query", testCtx, mock.Anything, mock.Anything).Return(nil, 0, nil)
+		db.Tag.On("QueryForAutoTag", testCtx, mock.Anything).Return([]*models.Tag{&tag, &reversedTag}, nil).Once()
+		db.Tag.On("GetAliases", testCtx, tagID).Return([]string{
 			tagName,
 		}, nil).Once()
-		mockTagReader.On("GetAliases", reversedTagID).Return([]string{}, nil).Once()
+		db.Tag.On("GetAliases", testCtx, reversedTagID).Return([]string{}, nil).Once()
 
-		doTest(mockTagReader, mockGalleryReader, test)
+		doTest(db, test)
 	}
 }

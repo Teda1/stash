@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -19,51 +21,98 @@ import (
 	gqlLru "github.com/99designs/gqlgen/graphql/handler/lru"
 	gqlTransport "github.com/99designs/gqlgen/graphql/handler/transport"
 	gqlPlayground "github.com/99designs/gqlgen/graphql/playground"
-	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"github.com/go-chi/httplog"
 	"github.com/gorilla/websocket"
 	"github.com/vearutop/statigz"
 
-	"github.com/go-chi/httplog"
-	"github.com/rs/cors"
+	"github.com/stashapp/stash/internal/api/loaders"
+	"github.com/stashapp/stash/internal/build"
 	"github.com/stashapp/stash/internal/manager"
 	"github.com/stashapp/stash/internal/manager/config"
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/logger"
-	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/plugin"
+	"github.com/stashapp/stash/pkg/utils"
 	"github.com/stashapp/stash/ui"
 )
 
-var version string
-var buildstamp string
-var githash string
+const (
+	loginEndpoint      = "/login"
+	logoutEndpoint     = "/logout"
+	gqlEndpoint        = "/graphql"
+	playgroundEndpoint = "/playground"
+)
 
-var uiBox = ui.UIBox
-var loginUIBox = ui.LoginUIBox
+type Server struct {
+	http.Server
+	displayAddress string
 
-func Start() error {
-	initialiseImages()
+	manager *manager.Manager
+}
+
+// Called at startup
+func Initialize() (*Server, error) {
+	mgr := manager.GetInstance()
+	cfg := mgr.Config
+
+	initCustomPerformerImages(cfg.GetCustomPerformerImageLocation())
+
+	displayHost := cfg.GetHost()
+	if displayHost == "0.0.0.0" {
+		displayHost = "localhost"
+	}
+	displayAddress := displayHost + ":" + strconv.Itoa(cfg.GetPort())
+
+	address := cfg.GetHost() + ":" + strconv.Itoa(cfg.GetPort())
+	tlsConfig, err := makeTLSConfig(cfg)
+	if err != nil {
+		// assume we don't want to start with a broken TLS configuration
+		return nil, fmt.Errorf("error loading TLS config: %v", err)
+	}
+
+	if tlsConfig != nil {
+		displayAddress = "https://" + displayAddress + "/"
+	} else {
+		displayAddress = "http://" + displayAddress + "/"
+	}
 
 	r := chi.NewRouter()
 
+	server := &Server{
+		Server: http.Server{
+			Addr:      address,
+			Handler:   r,
+			TLSConfig: tlsConfig,
+			// disable http/2 support by default
+			// when http/2 is enabled, we are unable to hijack and close
+			// the connection/request. This is necessary to stop running
+			// streams when deleting a scene file.
+			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		},
+		displayAddress: displayAddress,
+		manager:        mgr,
+	}
+
 	r.Use(middleware.Heartbeat("/healthz"))
+	r.Use(cors.AllowAll().Handler)
 	r.Use(authenticateHandler())
-	visitedPluginHandler := manager.GetInstance().SessionStore.VisitedPluginHandler()
+	visitedPluginHandler := mgr.SessionStore.VisitedPluginHandler()
 	r.Use(visitedPluginHandler)
 
 	r.Use(middleware.Recoverer)
 
-	c := config.GetInstance()
-	if c.GetLogAccess() {
+	if cfg.GetLogAccess() {
 		httpLogger := httplog.NewLogger("Stash", httplog.Options{
 			Concise: true,
 		})
 		r.Use(httplog.RequestLogger(httpLogger))
 	}
 	r.Use(SecurityHeadersMiddleware)
-	r.Use(middleware.DefaultCompress)
+	r.Use(middleware.Compress(4))
 	r.Use(middleware.StripSlashes)
-	r.Use(cors.AllowAll().Handler)
 	r.Use(BaseURLMiddleware)
 
 	recoverFunc := func(ctx context.Context, err interface{}) error {
@@ -74,14 +123,27 @@ func Start() error {
 		return errors.New(message)
 	}
 
-	txnManager := manager.GetInstance().TxnManager
-	pluginCache := manager.GetInstance().PluginCache
-	resolver := &Resolver{
-		txnManager:   txnManager,
-		hookExecutor: pluginCache,
+	repo := mgr.Repository
+
+	dataloaders := loaders.Middleware{
+		Repository: repo,
 	}
 
-	gqlSrv := gqlHandler.New(models.NewExecutableSchema(models.Config{Resolvers: resolver}))
+	r.Use(dataloaders.Middleware)
+
+	pluginCache := mgr.PluginCache
+	sceneService := mgr.SceneService
+	imageService := mgr.ImageService
+	galleryService := mgr.GalleryService
+	resolver := &Resolver{
+		repository:     repo,
+		sceneService:   sceneService,
+		imageService:   imageService,
+		galleryService: galleryService,
+		hookExecutor:   pluginCache,
+	}
+
+	gqlSrv := gqlHandler.New(NewExecutableSchema(Config{Resolvers: resolver}))
 	gqlSrv.SetRecoverFunc(recoverFunc)
 	gqlSrv.AddTransport(gqlTransport.Websocket{
 		Upgrader: websocket.Upgrader{
@@ -95,107 +157,67 @@ func Start() error {
 	gqlSrv.AddTransport(gqlTransport.GET{})
 	gqlSrv.AddTransport(gqlTransport.POST{})
 	gqlSrv.AddTransport(gqlTransport.MultipartForm{
-		MaxUploadSize: c.GetMaxUploadSize(),
+		MaxUploadSize: cfg.GetMaxUploadSize(),
 	})
 
 	gqlSrv.SetQueryCache(gqlLru.New(1000))
 	gqlSrv.Use(gqlExtension.Introspection{})
 
+	gqlSrv.SetErrorPresenter(gqlErrorHandler)
+
 	gqlHandlerFunc := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		gqlSrv.ServeHTTP(w, r)
 	}
 
 	// register GQL handler with plugin cache
 	// chain the visited plugin handler
-	manager.GetInstance().PluginCache.RegisterGQLHandler(visitedPluginHandler(http.HandlerFunc(gqlHandlerFunc)))
+	// also requires the dataloader middleware
+	gqlHandler := visitedPluginHandler(dataloaders.Middleware(http.HandlerFunc(gqlHandlerFunc)))
+	pluginCache.RegisterGQLHandler(gqlHandler)
 
-	r.HandleFunc("/graphql", gqlHandlerFunc)
-	r.HandleFunc("/playground", gqlPlayground.Handler("GraphQL playground", "/graphql"))
-
-	// session handlers
-	r.Post(loginEndPoint, handleLogin(loginUIBox))
-	r.Get("/logout", handleLogout(loginUIBox))
-
-	r.Get(loginEndPoint, getLoginHandler(loginUIBox))
-
-	r.Mount("/performer", performerRoutes{
-		txnManager: txnManager,
-	}.Routes())
-	r.Mount("/scene", sceneRoutes{
-		txnManager: txnManager,
-	}.Routes())
-	r.Mount("/image", imageRoutes{
-		txnManager: txnManager,
-	}.Routes())
-	r.Mount("/studio", studioRoutes{
-		txnManager: txnManager,
-	}.Routes())
-	r.Mount("/movie", movieRoutes{
-		txnManager: txnManager,
-	}.Routes())
-	r.Mount("/tag", tagRoutes{
-		txnManager: txnManager,
-	}.Routes())
-	r.Mount("/downloads", downloadsRoutes{}.Routes())
-
-	r.HandleFunc("/css", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/css")
-		if !c.GetCSSEnabled() {
-			return
-		}
-
-		// search for custom.css in current directory, then $HOME/.stash
-		fn := c.GetCSSPath()
-		exists, _ := fsutil.FileExists(fn)
-		if !exists {
-			return
-		}
-
-		http.ServeFile(w, r, fn)
+	r.HandleFunc(gqlEndpoint, gqlHandlerFunc)
+	r.HandleFunc(playgroundEndpoint, func(w http.ResponseWriter, r *http.Request) {
+		setPageSecurityHeaders(w, r, pluginCache.ListPlugins())
+		endpoint := getProxyPrefix(r) + gqlEndpoint
+		gqlPlayground.Handler("GraphQL playground", endpoint)(w, r)
 	})
 
-	r.HandleFunc("/login*", func(w http.ResponseWriter, r *http.Request) {
-		ext := path.Ext(r.URL.Path)
-		if ext == ".html" || ext == "" {
-			prefix := getProxyPrefix(r.Header)
+	r.Mount("/performer", server.getPerformerRoutes())
+	r.Mount("/scene", server.getSceneRoutes())
+	r.Mount("/image", server.getImageRoutes())
+	r.Mount("/studio", server.getStudioRoutes())
+	r.Mount("/movie", server.getMovieRoutes())
+	r.Mount("/tag", server.getTagRoutes())
+	r.Mount("/downloads", server.getDownloadsRoutes())
+	r.Mount("/plugin", server.getPluginRoutes())
 
-			data := getLoginPage(loginUIBox)
-			baseURLIndex := strings.Replace(string(data), "%BASE_URL%", prefix+"/", 2)
-			_, _ = w.Write([]byte(baseURLIndex))
-		} else {
-			r.URL.Path = strings.Replace(r.URL.Path, loginEndPoint, "", 1)
-			loginRoot, err := fs.Sub(loginUIBox, loginRootDir)
-			if err != nil {
-				panic(err)
-			}
-			http.FileServer(http.FS(loginRoot)).ServeHTTP(w, r)
-		}
+	r.HandleFunc("/css", cssHandler(cfg))
+	r.HandleFunc("/javascript", javascriptHandler(cfg))
+	r.HandleFunc("/customlocales", customLocalesHandler(cfg))
+
+	staticLoginUI := statigz.FileServer(ui.LoginUIBox.(fs.ReadDirFS))
+
+	r.Get(loginEndpoint, handleLogin())
+	r.Post(loginEndpoint, handleLoginPost())
+	r.Get(logoutEndpoint, handleLogout())
+	r.HandleFunc(loginEndpoint+"/*", func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, loginEndpoint)
+		w.Header().Set("Cache-Control", "no-cache")
+		staticLoginUI.ServeHTTP(w, r)
 	})
 
 	// Serve static folders
-	customServedFolders := c.GetCustomServedFolders()
+	customServedFolders := cfg.GetCustomServedFolders()
 	if customServedFolders != nil {
-		r.HandleFunc("/custom/*", func(w http.ResponseWriter, r *http.Request) {
-			r.URL.Path = strings.Replace(r.URL.Path, "/custom", "", 1)
-
-			// map the path to the applicable filesystem location
-			var dir string
-			r.URL.Path, dir = customServedFolders.GetFilesystemLocation(r.URL.Path)
-			if dir != "" {
-				http.FileServer(http.Dir(dir)).ServeHTTP(w, r)
-			} else {
-				http.NotFound(w, r)
-			}
-		})
+		r.Mount("/custom", getCustomRoutes(customServedFolders))
 	}
 
-	customUILocation := c.GetCustomUILocation()
-	static := statigz.FileServer(uiBox)
+	customUILocation := cfg.GetCustomUILocation()
+	staticUI := statigz.FileServer(ui.UIBox.(fs.ReadDirFS))
 
 	// Serve the web app
 	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
-		const uiRootDir = "v2.5/build"
-
 		ext := path.Ext(r.URL.Path)
 
 		if customUILocation != "" {
@@ -208,93 +230,208 @@ func Start() error {
 		}
 
 		if ext == ".html" || ext == "" {
-			themeColor := c.GetThemeColor()
-			data, err := uiBox.ReadFile(uiRootDir + "/index.html")
+			themeColor := cfg.GetThemeColor()
+			data, err := fs.ReadFile(ui.UIBox, "index.html")
 			if err != nil {
 				panic(err)
 			}
+			indexHtml := string(data)
 
-			prefix := getProxyPrefix(r.Header)
-			baseURLIndex := strings.ReplaceAll(string(data), "%COLOR%", themeColor)
-			baseURLIndex = strings.ReplaceAll(baseURLIndex, "/%BASE_URL%", prefix)
-			baseURLIndex = strings.Replace(baseURLIndex, "base href=\"/\"", fmt.Sprintf("base href=\"%s\"", prefix+"/"), 1)
-			_, _ = w.Write([]byte(baseURLIndex))
+			prefix := getProxyPrefix(r)
+			indexHtml = strings.ReplaceAll(indexHtml, "%COLOR%", themeColor)
+			indexHtml = strings.Replace(indexHtml, `<base href="/"`, fmt.Sprintf(`<base href="%s/"`, prefix), 1)
+
+			w.Header().Set("Content-Type", "text/html")
+			setPageSecurityHeaders(w, r, pluginCache.ListPlugins())
+
+			utils.ServeStaticContent(w, r, []byte(indexHtml))
 		} else {
-			isStatic, _ := path.Match("/static/*/*", r.URL.Path)
+			isStatic, _ := path.Match("/assets/*", r.URL.Path)
 			if isStatic {
-				w.Header().Add("Cache-Control", "max-age=604800000")
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
 			}
 
-			prefix := getProxyPrefix(r.Header)
-			if prefix != "" {
-				r.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
-			}
-			r.URL.Path = uiRootDir + r.URL.Path
-
-			static.ServeHTTP(w, r)
+			staticUI.ServeHTTP(w, r)
 		}
 	})
 
-	displayHost := c.GetHost()
-	if displayHost == "0.0.0.0" {
-		displayHost = "localhost"
-	}
-	displayAddress := displayHost + ":" + strconv.Itoa(c.GetPort())
-
-	address := c.GetHost() + ":" + strconv.Itoa(c.GetPort())
-	tlsConfig, err := makeTLSConfig(c)
-	if err != nil {
-		// assume we don't want to start with a broken TLS configuration
-		panic(fmt.Errorf("error loading TLS config: %v", err))
-	}
-
-	server := &http.Server{
-		Addr:      address,
-		Handler:   r,
-		TLSConfig: tlsConfig,
-	}
-
-	printVersion()
+	logger.Infof("stash version: %s", build.VersionString())
 	go printLatestVersion(context.TODO())
-	logger.Infof("stash is listening on " + address)
-	if tlsConfig != nil {
-		displayAddress = "https://" + displayAddress + "/"
-	} else {
-		displayAddress = "http://" + displayAddress + "/"
-	}
 
-	logger.Infof("stash is running at " + displayAddress)
-	if tlsConfig != nil {
-		err = server.ListenAndServeTLS("", "")
-	} else {
-		err = server.ListenAndServe()
-	}
+	return server, nil
+}
 
-	if !errors.Is(err, http.ErrServerClosed) {
+func (s *Server) Start() error {
+	logger.Infof("stash is listening on " + s.Addr)
+	logger.Infof("stash is running at " + s.displayAddress)
+
+	if s.TLSConfig != nil {
+		return s.ListenAndServeTLS("", "")
+	} else {
+		return s.ListenAndServe()
+	}
+}
+
+func (s *Server) Shutdown() {
+	err := s.Server.Shutdown(context.TODO())
+	if err != nil {
+		logger.Errorf("Error shutting down http server: %v", err)
+	}
+}
+
+func (s *Server) getPerformerRoutes() chi.Router {
+	repo := s.manager.Repository
+	return performerRoutes{
+		routes:          routes{txnManager: repo.TxnManager},
+		performerFinder: repo.Performer,
+	}.Routes()
+}
+
+func (s *Server) getSceneRoutes() chi.Router {
+	repo := s.manager.Repository
+	return sceneRoutes{
+		routes:            routes{txnManager: repo.TxnManager},
+		sceneFinder:       repo.Scene,
+		fileGetter:        repo.File,
+		captionFinder:     repo.File,
+		sceneMarkerFinder: repo.SceneMarker,
+		tagFinder:         repo.Tag,
+	}.Routes()
+}
+
+func (s *Server) getImageRoutes() chi.Router {
+	repo := s.manager.Repository
+	return imageRoutes{
+		routes:      routes{txnManager: repo.TxnManager},
+		imageFinder: repo.Image,
+		fileGetter:  repo.File,
+	}.Routes()
+}
+
+func (s *Server) getStudioRoutes() chi.Router {
+	repo := s.manager.Repository
+	return studioRoutes{
+		routes:       routes{txnManager: repo.TxnManager},
+		studioFinder: repo.Studio,
+	}.Routes()
+}
+
+func (s *Server) getMovieRoutes() chi.Router {
+	repo := s.manager.Repository
+	return movieRoutes{
+		routes:      routes{txnManager: repo.TxnManager},
+		movieFinder: repo.Movie,
+	}.Routes()
+}
+
+func (s *Server) getTagRoutes() chi.Router {
+	repo := s.manager.Repository
+	return tagRoutes{
+		routes:    routes{txnManager: repo.TxnManager},
+		tagFinder: repo.Tag,
+	}.Routes()
+}
+
+func (s *Server) getDownloadsRoutes() chi.Router {
+	return downloadsRoutes{}.Routes()
+}
+
+func (s *Server) getPluginRoutes() chi.Router {
+	return pluginRoutes{
+		pluginCache: s.manager.PluginCache,
+	}.Routes()
+}
+
+func copyFile(w io.Writer, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
 		return err
 	}
+	defer f.Close()
 
-	return nil
+	_, err = io.Copy(w, f)
+
+	return err
 }
 
-func printVersion() {
-	versionString := githash
-	if config.IsOfficialBuild() {
-		versionString += " - Official Build"
-	} else {
-		versionString += " - Unofficial Build"
+func serveFiles(w http.ResponseWriter, r *http.Request, paths []string) {
+	buffer := bytes.Buffer{}
+
+	for _, path := range paths {
+		err := copyFile(&buffer, path)
+		if err != nil {
+			logger.Errorf("error serving file %s: %v", path, err)
+		}
+		buffer.Write([]byte("\n"))
 	}
-	if version != "" {
-		versionString = version + " (" + versionString + ")"
+
+	utils.ServeStaticContent(w, r, buffer.Bytes())
+}
+
+func cssHandler(c *config.Config) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var paths []string
+
+		if c.GetCSSEnabled() {
+			// search for custom.css in current directory, then $HOME/.stash
+			fn := c.GetCSSPath()
+			exists, _ := fsutil.FileExists(fn)
+			if exists {
+				paths = append(paths, fn)
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/css")
+		serveFiles(w, r, paths)
 	}
-	fmt.Printf("stash version: %s - %s\n", versionString, buildstamp)
 }
 
-func GetVersion() (string, string, string) {
-	return version, githash, buildstamp
+func javascriptHandler(c *config.Config) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var paths []string
+
+		if c.GetJavascriptEnabled() {
+			// search for custom.js in current directory, then $HOME/.stash
+			fn := c.GetJavascriptPath()
+			exists, _ := fsutil.FileExists(fn)
+			if exists {
+				paths = append(paths, fn)
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/javascript")
+		serveFiles(w, r, paths)
+	}
 }
 
-func makeTLSConfig(c *config.Instance) (*tls.Config, error) {
+func customLocalesHandler(c *config.Config) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		buffer := bytes.Buffer{}
+
+		if c.GetCustomLocalesEnabled() {
+			// search for custom-locales.json in current directory, then $HOME/.stash
+			path := c.GetCustomLocalesPath()
+			exists, _ := fsutil.FileExists(path)
+			if exists {
+				err := copyFile(&buffer, path)
+				if err != nil {
+					logger.Errorf("error serving file %s: %v", path, err)
+				}
+			}
+		}
+
+		if buffer.Len() == 0 {
+			buffer.Write([]byte("{}"))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		utils.ServeStaticContent(w, r, buffer.Bytes())
+	}
+}
+
+func makeTLSConfig(c *config.Config) (*tls.Config, error) {
 	c.InitTLS()
 	certFile, keyFile := c.GetTLSFiles()
 
@@ -314,12 +451,12 @@ func makeTLSConfig(c *config.Instance) (*tls.Config, error) {
 
 	cert, err := os.ReadFile(certFile)
 	if err != nil {
-		return nil, fmt.Errorf("error reading SSL certificate file %s: %s", certFile, err.Error())
+		return nil, fmt.Errorf("error reading SSL certificate file %s: %v", certFile, err)
 	}
 
 	key, err := os.ReadFile(keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("error reading SSL key file %s: %s", keyFile, err.Error())
+		return nil, fmt.Errorf("error reading SSL key file %s: %v", keyFile, err)
 	}
 
 	certs := make([]tls.Certificate, 1)
@@ -334,6 +471,91 @@ func makeTLSConfig(c *config.Instance) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
+func isURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+func setPageSecurityHeaders(w http.ResponseWriter, r *http.Request, plugins []*plugin.Plugin) {
+	c := config.GetInstance()
+
+	defaultSrc := "data: 'self' 'unsafe-inline'"
+	connectSrcSlice := []string{
+		"data:",
+		"'self'",
+	}
+	imageSrc := "data: *"
+	scriptSrcSlice := []string{
+		"'self'",
+		"http://www.gstatic.com",
+		"https://www.gstatic.com",
+		"'unsafe-inline'",
+		"'unsafe-eval'",
+	}
+	styleSrcSlice := []string{
+		"'self'",
+		"'unsafe-inline'",
+	}
+	mediaSrc := "blob: 'self'"
+
+	// Workaround Safari bug https://bugs.webkit.org/show_bug.cgi?id=201591
+	// Allows websocket requests to any origin
+	connectSrcSlice = append(connectSrcSlice, "ws:", "wss:")
+
+	// The graphql playground pulls its frontend from a cdn
+	if r.URL.Path == playgroundEndpoint {
+		connectSrcSlice = append(connectSrcSlice, "https://cdn.jsdelivr.net")
+		scriptSrcSlice = append(scriptSrcSlice, "https://cdn.jsdelivr.net")
+		styleSrcSlice = append(styleSrcSlice, "https://cdn.jsdelivr.net")
+	}
+
+	if !c.IsNewSystem() && c.GetHandyKey() != "" {
+		connectSrcSlice = append(connectSrcSlice, "https://www.handyfeeling.com")
+	}
+
+	for _, plugin := range plugins {
+		if !plugin.Enabled {
+			continue
+		}
+
+		ui := plugin.UI
+
+		for _, url := range ui.ExternalScript {
+			if isURL(url) {
+				scriptSrcSlice = append(scriptSrcSlice, url)
+			}
+		}
+
+		for _, url := range ui.ExternalCSS {
+			if isURL(url) {
+				styleSrcSlice = append(styleSrcSlice, url)
+			}
+		}
+
+		connectSrcSlice = append(connectSrcSlice, ui.CSP.ConnectSrc...)
+		scriptSrcSlice = append(scriptSrcSlice, ui.CSP.ScriptSrc...)
+		styleSrcSlice = append(styleSrcSlice, ui.CSP.StyleSrc...)
+	}
+
+	connectSrc := strings.Join(connectSrcSlice, " ")
+	scriptSrc := strings.Join(scriptSrcSlice, " ")
+	styleSrc := strings.Join(styleSrcSlice, " ")
+
+	cspDirectives := fmt.Sprintf("default-src %s; connect-src %s; img-src %s; script-src %s; style-src %s; media-src %s;", defaultSrc, connectSrc, imageSrc, scriptSrc, styleSrc, mediaSrc)
+	cspDirectives += " worker-src blob:; child-src 'none'; object-src 'none'; form-action 'self';"
+
+	w.Header().Set("Referrer-Policy", "same-origin")
+	w.Header().Set("Content-Security-Policy", cspDirectives)
+}
+
+func SecurityHeadersMiddleware(next http.Handler) http.Handler {
+	fn := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		next.ServeHTTP(w, r)
+	}
+	return http.HandlerFunc(fn)
+}
+
 type contextKey struct {
 	name string
 }
@@ -342,46 +564,15 @@ var (
 	BaseURLCtxKey = &contextKey{"BaseURL"}
 )
 
-func SecurityHeadersMiddleware(next http.Handler) http.Handler {
-	fn := func(w http.ResponseWriter, r *http.Request) {
-		c := config.GetInstance()
-		connectableOrigins := "connect-src data: 'self'"
-
-		// Workaround Safari bug https://bugs.webkit.org/show_bug.cgi?id=201591
-		// Allows websocket requests to any origin
-		connectableOrigins += " ws: wss:"
-
-		// The graphql playground pulls its frontend from a cdn
-		connectableOrigins += " https://cdn.jsdelivr.net "
-
-		if !c.IsNewSystem() && c.GetHandyKey() != "" {
-			connectableOrigins += " https://www.handyfeeling.com"
-		}
-		connectableOrigins += "; "
-
-		cspDirectives := "default-src data: 'self' 'unsafe-inline';" + connectableOrigins + "img-src data: *; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline' 'unsafe-eval'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src-elem 'self' https://cdn.jsdelivr.net 'unsafe-inline'; media-src 'self' blob:; child-src 'none'; object-src 'none'; form-action 'self'"
-
-		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-XSS-Protection", "1")
-		w.Header().Set("Content-Security-Policy", cspDirectives)
-
-		next.ServeHTTP(w, r)
-	}
-	return http.HandlerFunc(fn)
-}
-
 func BaseURLMiddleware(next http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		var scheme string
-		if strings.Compare("https", r.URL.Scheme) == 0 || r.Proto == "HTTP/2.0" || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme := "http"
+		if strings.Compare("https", r.URL.Scheme) == 0 || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 			scheme = "https"
-		} else {
-			scheme = "http"
 		}
-		prefix := getProxyPrefix(r.Header)
+		prefix := getProxyPrefix(r)
 
 		baseURL := scheme + "://" + r.Host + prefix
 
@@ -397,11 +588,6 @@ func BaseURLMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(fn)
 }
 
-func getProxyPrefix(headers http.Header) string {
-	prefix := ""
-	if headers.Get("X-Forwarded-Prefix") != "" {
-		prefix = strings.TrimRight(headers.Get("X-Forwarded-Prefix"), "/")
-	}
-
-	return prefix
+func getProxyPrefix(r *http.Request) string {
+	return strings.TrimRight(r.Header.Get("X-Forwarded-Prefix"), "/")
 }

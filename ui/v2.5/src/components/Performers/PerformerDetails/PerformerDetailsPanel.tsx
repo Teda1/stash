@@ -1,16 +1,29 @@
 import React from "react";
-import { FormattedMessage, useIntl } from "react-intl";
-import { TagLink } from "src/components/Shared";
+import { useIntl } from "react-intl";
+import { TagLink } from "src/components/Shared/TagLink";
 import * as GQL from "src/core/generated-graphql";
-import { TextUtils, getStashboxBase } from "src/utils";
-import { TextField, URLField } from "src/utils/field";
+import TextUtils from "src/utils/text";
+import { DetailItem } from "src/components/Shared/DetailItem";
+import { CountryFlag } from "src/components/Shared/CountryFlag";
+import { StashIDPill } from "src/components/Shared/StashID";
+import {
+  FormatAge,
+  FormatCircumcised,
+  FormatHeight,
+  FormatPenisLength,
+  FormatWeight,
+} from "../PerformerList";
 
 interface IPerformerDetails {
   performer: GQL.PerformerDataFragment;
+  collapsed?: boolean;
+  fullWidth?: boolean;
 }
 
 export const PerformerDetailsPanel: React.FC<IPerformerDetails> = ({
   performer,
+  collapsed,
+  fullWidth,
 }) => {
   // Network state
   const intl = useIntl();
@@ -19,20 +32,12 @@ export const PerformerDetailsPanel: React.FC<IPerformerDetails> = ({
     if (!performer.tags.length) {
       return;
     }
-
     return (
-      <>
-        <dt>
-          <FormattedMessage id="tags" />
-        </dt>
-        <dd>
-          <ul className="pl-0">
-            {(performer.tags ?? []).map((tag) => (
-              <TagLink key={tag.id} tagType="performer" tag={tag} />
-            ))}
-          </ul>
-        </dd>
-      </>
+      <ul className="pl-0">
+        {(performer.tags ?? []).map((tag) => (
+          <TagLink key={tag.id} linkType="performer" tag={tag} />
+        ))}
+      </ul>
     );
   }
 
@@ -42,110 +47,204 @@ export const PerformerDetailsPanel: React.FC<IPerformerDetails> = ({
     }
 
     return (
-      <>
-        <dt>StashIDs</dt>
-        <dd>
-          <ul className="pl-0">
-            {performer.stash_ids.map((stashID) => {
-              const base = getStashboxBase(stashID.endpoint);
-              const link = base ? (
-                <a
-                  href={`${base}performers/${stashID.stash_id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {stashID.stash_id}
-                </a>
-              ) : (
-                stashID.stash_id
-              );
-              return (
-                <li key={stashID.stash_id} className="row no-gutters">
-                  {link}
-                </li>
-              );
-            })}
-          </ul>
-        </dd>
-      </>
+      <ul className="pl-0">
+        {performer.stash_ids.map((stashID) => (
+          <li key={stashID.stash_id} className="row no-gutters">
+            <StashIDPill stashID={stashID} linkType="performers" />
+          </li>
+        ))}
+      </ul>
     );
   }
 
-  const formatHeight = (height?: string | null) => {
-    if (!height) {
-      return "";
+  function maybeRenderExtraDetails() {
+    if (!collapsed) {
+      /* Remove extra urls provided in details since they will be present by perfomr name */
+      /* This code can be removed once multple urls are supported for performers */
+      let details = performer?.details
+        ?.replace(/\[((?:http|www\.)[^\n\]]+)\]/gm, "")
+        .trim();
+      return (
+        <>
+          <DetailItem
+            id="tattoos"
+            value={performer?.tattoos}
+            fullWidth={fullWidth}
+          />
+          <DetailItem
+            id="piercings"
+            value={performer?.piercings}
+            fullWidth={fullWidth}
+          />
+          <DetailItem
+            id="career_length"
+            value={performer?.career_length}
+            fullWidth={fullWidth}
+          />
+          <DetailItem id="details" value={details} fullWidth={fullWidth} />
+          <DetailItem
+            id="tags"
+            value={renderTagsField()}
+            fullWidth={fullWidth}
+          />
+          <DetailItem
+            id="stash_ids"
+            value={renderStashIDs()}
+            fullWidth={fullWidth}
+          />
+        </>
+      );
     }
-    return intl.formatNumber(Number.parseInt(height, 10), {
-      style: "unit",
-      unit: "centimeter",
-      unitDisplay: "narrow",
-    });
-  };
-
-  const formatWeight = (weight?: number | null) => {
-    if (!weight) {
-      return "";
-    }
-    return intl.formatNumber(weight, {
-      style: "unit",
-      unit: "kilogram",
-      unitDisplay: "narrow",
-    });
-  };
+  }
 
   return (
-    <dl className="details-list">
-      <TextField
-        id="gender"
+    <div className="detail-group">
+      {performer.gender ? (
+        <DetailItem
+          id="gender"
+          value={intl.formatMessage({ id: "gender_types." + performer.gender })}
+          fullWidth={fullWidth}
+        />
+      ) : (
+        ""
+      )}
+      <DetailItem
+        id="age"
         value={
-          performer.gender
-            ? intl.formatMessage({ id: "gender_types." + performer.gender })
-            : undefined
+          !fullWidth
+            ? TextUtils.age(performer.birthdate, performer.death_date)
+            : FormatAge(performer.birthdate, performer.death_date)
         }
+        title={
+          !fullWidth
+            ? TextUtils.formatDate(intl, performer.birthdate ?? undefined)
+            : ""
+        }
+        fullWidth={fullWidth}
       />
-      <TextField
-        id="birthdate"
-        value={TextUtils.formatDate(intl, performer.birthdate ?? undefined)}
+      <DetailItem id="death_date" value={performer.death_date} />
+      {performer.country ? (
+        <DetailItem
+          id="country"
+          value={
+            <CountryFlag
+              country={performer.country}
+              className="mr-2"
+              includeName={true}
+            />
+          }
+          fullWidth={fullWidth}
+        />
+      ) : (
+        ""
+      )}
+      <DetailItem
+        id="ethnicity"
+        value={performer?.ethnicity}
+        fullWidth={fullWidth}
       />
-      <TextField
-        id="death_date"
-        value={TextUtils.formatDate(intl, performer.death_date ?? undefined)}
+      <DetailItem
+        id="hair_color"
+        value={performer?.hair_color}
+        fullWidth={fullWidth}
       />
-      <TextField id="ethnicity" value={performer.ethnicity} />
-      <TextField id="hair_color" value={performer.hair_color} />
-      <TextField id="eye_color" value={performer.eye_color} />
-      <TextField id="country" value={performer.country} />
-      <TextField id="height" value={formatHeight(performer.height)} />
-      <TextField id="weight" value={formatWeight(performer.weight)} />
-      <TextField id="measurements" value={performer.measurements} />
-      <TextField id="fake_tits" value={performer.fake_tits} />
-      <TextField id="career_length" value={performer.career_length} />
-      <TextField id="tattoos" value={performer.tattoos} />
-      <TextField id="piercings" value={performer.piercings} />
-      <TextField id="details" value={performer.details} />
-      <URLField
-        id="url"
-        value={performer.url}
-        url={TextUtils.sanitiseURL(performer.url ?? "")}
+      <DetailItem
+        id="eye_color"
+        value={performer?.eye_color}
+        fullWidth={fullWidth}
       />
-      <URLField
-        id="twitter"
-        value={performer.twitter}
-        url={TextUtils.sanitiseURL(
-          performer.twitter ?? "",
-          TextUtils.twitterURL
+      <DetailItem
+        id="height"
+        value={FormatHeight(performer.height_cm)}
+        fullWidth={fullWidth}
+      />
+      <DetailItem
+        id="weight"
+        value={FormatWeight(performer.weight)}
+        fullWidth={fullWidth}
+      />
+      <DetailItem
+        id="penis_length"
+        value={FormatPenisLength(performer.penis_length)}
+        fullWidth={fullWidth}
+      />
+      <DetailItem
+        id="circumcised"
+        value={FormatCircumcised(performer.circumcised)}
+        fullWidth={fullWidth}
+      />
+      <DetailItem
+        id="measurements"
+        value={performer?.measurements}
+        fullWidth={fullWidth}
+      />
+      <DetailItem
+        id="fake_tits"
+        value={performer?.fake_tits}
+        fullWidth={fullWidth}
+      />
+      {maybeRenderExtraDetails()}
+    </div>
+  );
+};
+
+export const CompressedPerformerDetailsPanel: React.FC<IPerformerDetails> = ({
+  performer,
+}) => {
+  // Network state
+  const intl = useIntl();
+
+  function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  return (
+    <div className="sticky detail-header">
+      <div className="sticky detail-header-group">
+        <a className="performer-name" onClick={() => scrollToTop()}>
+          {performer.name}
+        </a>
+        {performer.gender ? (
+          <>
+            <span className="detail-divider">/</span>
+            <span className="performer-gender">
+              {intl.formatMessage({ id: "gender_types." + performer.gender })}
+            </span>
+          </>
+        ) : (
+          ""
         )}
-      />
-      <URLField
-        id="instagram"
-        value={performer.instagram}
-        url={TextUtils.sanitiseURL(
-          performer.instagram ?? "",
-          TextUtils.instagramURL
+        {performer.birthdate ? (
+          <>
+            <span className="detail-divider">/</span>
+            <span
+              className="performer-age"
+              title={TextUtils.formatDate(
+                intl,
+                performer.birthdate ?? undefined
+              )}
+            >
+              {TextUtils.age(performer.birthdate, performer.death_date)}
+            </span>
+          </>
+        ) : (
+          ""
         )}
-      />
-      {renderTagsField()}
-      {renderStashIDs()}
-    </dl>
+        {performer.country ? (
+          <>
+            <span className="detail-divider">/</span>
+            <span className="performer-country">
+              <CountryFlag
+                country={performer.country}
+                className="mr-2"
+                includeName={true}
+              />
+            </span>
+          </>
+        ) : (
+          ""
+        )}
+      </div>
+    </div>
   );
 };
