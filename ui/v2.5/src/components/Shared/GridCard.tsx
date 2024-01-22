@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Card, Form } from "react-bootstrap";
 import { Link } from "react-router-dom";
 import cx from "classnames";
@@ -8,6 +8,7 @@ interface ICardProps {
   className?: string;
   linkClassName?: string;
   thumbnailSectionClassName?: string;
+  width?: number;
   url: string;
   pretitleIcon?: JSX.Element;
   title: JSX.Element | string;
@@ -22,6 +23,40 @@ interface ICardProps {
   duration?: number;
   interactiveHeatmap?: string;
 }
+
+export const useContainerDimensions = (
+  myRef: React.RefObject<HTMLDivElement>
+) => {
+  const overflow = window?.visualViewport?.height! < window.innerHeight;
+  const defaultWidth = overflow ? window.innerWidth - 15 : window.innerWidth;
+  const [dimensions, setDimensions] = useState({
+    width: defaultWidth,
+    height: 0,
+  });
+
+  useEffect(() => {
+    const getDimensions = () => ({
+      width: myRef.current!.offsetWidth,
+      height: myRef.current!.offsetHeight,
+    });
+
+    const handleResize = () => {
+      setDimensions(getDimensions());
+    };
+
+    if (myRef.current) {
+      setDimensions(getDimensions());
+    }
+
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [myRef]);
+
+  return dimensions;
+};
 
 export const GridCard: React.FC<ICardProps> = (props: ICardProps) => {
   const cardID = props.url.substring(1).split("?")[0].replace("/", "-");
@@ -126,6 +161,7 @@ export const GridCard: React.FC<ICardProps> = (props: ICardProps) => {
       onDragStart={handleDrag}
       onDragOver={handleDragOver}
       draggable={props.onSelectedChanged && props.selecting}
+      style={props.width ? { width: `${props.width}px` } : {}}
     >
       {maybeRenderCheckbox()}
 
