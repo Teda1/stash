@@ -4,7 +4,7 @@ import { useIntl } from "react-intl";
 import * as GQL from "src/core/generated-graphql";
 import NavUtils from "src/utils/navigation";
 import TextUtils from "src/utils/text";
-import { GridCard } from "../Shared/GridCard";
+import { GridCard, calculateCardWidth } from "../Shared/GridCard";
 import { CountryFlag } from "../Shared/CountryFlag";
 import { SweatDrops } from "../Shared/SweatDrops";
 import { HoverPopover } from "../Shared/HoverPopover";
@@ -22,6 +22,7 @@ import { RatingBanner } from "../Shared/RatingBanner";
 import cx from "classnames";
 import { usePerformerUpdate } from "src/core/StashService";
 import { ILabeledId } from "src/models/list-filter/types";
+import ScreenUtils from "src/utils/screen";
 
 export interface IPerformerCardExtraCriteria {
   scenes?: Criterion<CriterionValue>[];
@@ -69,21 +70,16 @@ export const PerformerCard: React.FC<IPerformerCardProps> = ({
 
   const [updatePerformer] = usePerformerUpdate();
   const [cardWidth, setCardWidth] = useState<number>();
-  const [imageHeight, setImageHeight] = useState<number>();
 
   useEffect(() => {
-    if (!containerWidth) return;
+    if (!containerWidth || ScreenUtils.isMobile()) return;
 
-    let containerPadding = 30;
-    let maxUsableWidth = containerWidth - containerPadding;
-    let maxCardWidth = 300;
-    let paddingOffset = 10;
-
-    let maxElementsOnRow = Math.ceil(maxUsableWidth / maxCardWidth!);
-    let fittedCardWidth = maxUsableWidth / maxElementsOnRow - paddingOffset;
-    let fittedimageHeight = (fittedCardWidth / 2) * 3;
+    let preferredCardWidth = 300;
+    let fittedCardWidth = calculateCardWidth(
+      containerWidth,
+      preferredCardWidth!
+    );
     setCardWidth(fittedCardWidth);
-    setImageHeight(fittedimageHeight);
   }, [containerWidth]);
 
   function renderFavoriteIcon() {
@@ -287,7 +283,6 @@ export const PerformerCard: React.FC<IPerformerCardProps> = ({
       image={
         <>
           <img
-            style={imageHeight ? { height: `${imageHeight}px` } : {}}
             loading="lazy"
             className="performer-card-image"
             alt={performer.name ?? ""}

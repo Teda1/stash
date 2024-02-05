@@ -2,7 +2,7 @@ import { Button, ButtonGroup, OverlayTrigger, Tooltip } from "react-bootstrap";
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import * as GQL from "src/core/generated-graphql";
-import { GridCard } from "../Shared/GridCard";
+import { GridCard, calculateCardWidth } from "../Shared/GridCard";
 import { HoverPopover } from "../Shared/HoverPopover";
 import { Icon } from "../Shared/Icon";
 import { SceneLink, TagLink } from "../Shared/TagLink";
@@ -14,6 +14,7 @@ import { ConfigurationContext } from "src/hooks/Config";
 import { RatingBanner } from "../Shared/RatingBanner";
 import { faBox, faPlayCircle, faTag } from "@fortawesome/free-solid-svg-icons";
 import { galleryTitle } from "src/core/galleries";
+import ScreenUtils from "src/utils/screen";
 
 interface IProps {
   gallery: GQL.SlimGalleryDataFragment;
@@ -30,28 +31,32 @@ export const GalleryCard: React.FC<IProps> = (props) => {
   const [cardWidth, setCardWidth] = useState<number>();
 
   useEffect(() => {
-    if (!props.containerWidth || props.zoomIndex === undefined) return;
+    if (
+      !props.containerWidth ||
+      props.zoomIndex === undefined ||
+      ScreenUtils.isMobile()
+    )
+      return;
 
-    let containerPadding = 30;
-    let containerWidth = props.containerWidth - containerPadding;
     let zoomValue = props.zoomIndex;
-    let maxCardWidth: number;
-    let paddingOffset = 10;
+    let preferredCardWidth: number;
     switch (zoomValue) {
       case 0:
-        maxCardWidth = 240;
+        preferredCardWidth = 240;
         break;
       case 1:
-        maxCardWidth = 340;
+        preferredCardWidth = 340;
         break;
       case 2:
-        maxCardWidth = 480;
+        preferredCardWidth = 480;
         break;
       case 3:
-        maxCardWidth = 640;
+        preferredCardWidth = 640;
     }
-    let maxElementsOnRow = Math.ceil(containerWidth / maxCardWidth!);
-    let fittedCardWidth = containerWidth / maxElementsOnRow - paddingOffset;
+    let fittedCardWidth = calculateCardWidth(
+      props.containerWidth,
+      preferredCardWidth!
+    );
     setCardWidth(fittedCardWidth);
   }, [props, props.containerWidth, props.zoomIndex]);
 

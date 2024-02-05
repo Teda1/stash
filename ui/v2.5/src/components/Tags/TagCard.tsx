@@ -5,8 +5,9 @@ import * as GQL from "src/core/generated-graphql";
 import NavUtils from "src/utils/navigation";
 import { FormattedMessage } from "react-intl";
 import { TruncatedText } from "../Shared/TruncatedText";
-import { GridCard } from "../Shared/GridCard";
+import { GridCard, calculateCardWidth } from "../Shared/GridCard";
 import { PopoverCountButton } from "../Shared/PopoverCountButton";
+import ScreenUtils from "src/utils/screen";
 
 interface IProps {
   tag: GQL.TagDataFragment;
@@ -28,28 +29,28 @@ export const TagCard: React.FC<IProps> = ({
   const [cardWidth, setCardWidth] = useState<number>();
 
   useEffect(() => {
-    if (!containerWidth || zoomIndex === undefined) return;
+    if (!containerWidth || zoomIndex === undefined || ScreenUtils.isMobile())
+      return;
 
-    let containerPadding = 30;
-    let maxUsableWidth = containerWidth - containerPadding;
     let zoomValue = zoomIndex;
-    let maxCardWidth: number;
-    let paddingOffset = 10;
+    let preferredCardWidth: number;
     switch (zoomValue) {
       case 0:
-        maxCardWidth = 240;
+        preferredCardWidth = 240;
         break;
       case 1:
-        maxCardWidth = 340;
+        preferredCardWidth = 340;
         break;
       case 2:
-        maxCardWidth = 480;
+        preferredCardWidth = 480;
         break;
       case 3:
-        maxCardWidth = 640;
+        preferredCardWidth = 640;
     }
-    let maxElementsOnRow = Math.ceil(maxUsableWidth / maxCardWidth!);
-    let fittedCardWidth = maxUsableWidth / maxElementsOnRow - paddingOffset;
+    let fittedCardWidth = calculateCardWidth(
+      containerWidth,
+      preferredCardWidth!
+    );
     setCardWidth(fittedCardWidth);
   }, [containerWidth, zoomIndex]);
 

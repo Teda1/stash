@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Button, ButtonGroup } from "react-bootstrap";
 import * as GQL from "src/core/generated-graphql";
-import { GridCard } from "../Shared/GridCard";
+import { GridCard, calculateCardWidth } from "../Shared/GridCard";
 import { HoverPopover } from "../Shared/HoverPopover";
 import { Icon } from "../Shared/Icon";
 import { SceneLink } from "../Shared/TagLink";
@@ -9,6 +9,7 @@ import { TruncatedText } from "../Shared/TruncatedText";
 import { FormattedMessage } from "react-intl";
 import { RatingBanner } from "../Shared/RatingBanner";
 import { faPlayCircle } from "@fortawesome/free-solid-svg-icons";
+import ScreenUtils from "src/utils/screen";
 
 interface IProps {
   movie: GQL.MovieDataFragment;
@@ -23,15 +24,13 @@ export const MovieCard: React.FC<IProps> = (props: IProps) => {
   const [cardWidth, setCardWidth] = useState<number>();
 
   useEffect(() => {
-    if (!props.containerWidth) return;
+    if (!props.containerWidth || ScreenUtils.isMobile()) return;
 
-    let containerPadding = 30;
-    let maxUsableWidth = props.containerWidth - containerPadding;
-    let maxCardWidth = 250;
-    let paddingOffset = 10;
-
-    let maxElementsOnRow = Math.ceil(maxUsableWidth / maxCardWidth!);
-    let fittedCardWidth = maxUsableWidth / maxElementsOnRow - paddingOffset;
+    let preferredCardWidth = 250;
+    let fittedCardWidth = calculateCardWidth(
+      props.containerWidth,
+      preferredCardWidth!
+    );
     setCardWidth(fittedCardWidth);
   }, [props, props.containerWidth]);
 

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef } from "react";
 import * as GQL from "src/core/generated-graphql";
 import { SceneQueue } from "src/models/sceneQueue";
 import { SceneCard } from "./SceneCard";
@@ -21,15 +21,12 @@ export const SceneCardsGrid: React.FC<ISceneCardsGrid> = ({
 }) => {
   const componentRef = useRef<HTMLDivElement>(null);
   const { width } = useContainerDimensions(componentRef);
-  const [previewHeight, setPreviewHeight] = useState<number>();
   return (
     <div className="row justify-content-center" ref={componentRef}>
       {scenes.map((scene, index) => (
         <SceneCard
           key={scene.id}
           containerWidth={width}
-          previewHeight={previewHeight}
-          setPreviewHeight={setPreviewHeight}
           scene={scene}
           queue={queue}
           index={index}

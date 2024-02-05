@@ -7,7 +7,7 @@ import { GalleryLink, TagLink } from "src/components/Shared/TagLink";
 import { HoverPopover } from "src/components/Shared/HoverPopover";
 import { SweatDrops } from "src/components/Shared/SweatDrops";
 import { PerformerPopoverButton } from "src/components/Shared/PerformerPopoverButton";
-import { GridCard } from "src/components/Shared/GridCard";
+import { GridCard, calculateCardWidth } from "src/components/Shared/GridCard";
 import { RatingBanner } from "src/components/Shared/RatingBanner";
 import {
   faBox,
@@ -17,6 +17,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { objectTitle } from "src/core/files";
 import { TruncatedText } from "../Shared/TruncatedText";
+import ScreenUtils from "src/utils/screen";
 
 interface IImageCardProps {
   image: GQL.SlimImageDataFragment;
@@ -34,28 +35,32 @@ export const ImageCard: React.FC<IImageCardProps> = (
   const [cardWidth, setCardWidth] = useState<number>();
 
   useEffect(() => {
-    if (!props.containerWidth || props.zoomIndex === undefined) return;
+    if (
+      !props.containerWidth ||
+      props.zoomIndex === undefined ||
+      ScreenUtils.isMobile()
+    )
+      return;
 
-    let containerPadding = 30;
-    let containerWidth = props.containerWidth - containerPadding;
     let zoomValue = props.zoomIndex;
-    let maxCardWidth: number;
-    let paddingOffset = 10;
+    let preferredCardWidth: number;
     switch (zoomValue) {
       case 0:
-        maxCardWidth = 240;
+        preferredCardWidth = 240;
         break;
       case 1:
-        maxCardWidth = 340;
+        preferredCardWidth = 340;
         break;
       case 2:
-        maxCardWidth = 480;
+        preferredCardWidth = 480;
         break;
       case 3:
-        maxCardWidth = 640;
+        preferredCardWidth = 640;
     }
-    let maxElementsOnRow = Math.ceil(containerWidth / maxCardWidth!);
-    let fittedCardWidth = containerWidth / maxElementsOnRow - paddingOffset;
+    let fittedCardWidth = calculateCardWidth(
+      props.containerWidth,
+      preferredCardWidth!
+    );
     setCardWidth(fittedCardWidth);
   }, [props, props.containerWidth, props.zoomIndex]);
 

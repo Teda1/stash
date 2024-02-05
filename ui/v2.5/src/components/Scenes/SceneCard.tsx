@@ -18,7 +18,7 @@ import TextUtils from "src/utils/text";
 import { SceneQueue } from "src/models/sceneQueue";
 import { ConfigurationContext } from "src/hooks/Config";
 import { PerformerPopoverButton } from "../Shared/PerformerPopoverButton";
-import { GridCard } from "../Shared/GridCard";
+import { GridCard, calculateCardWidth } from "../Shared/GridCard";
 import { RatingBanner } from "../Shared/RatingBanner";
 import { FormattedNumber } from "react-intl";
 import {
@@ -32,12 +32,12 @@ import {
 import { objectPath, objectTitle } from "src/core/files";
 import { PreviewScrubber } from "./PreviewScrubber";
 import { PatchComponent } from "src/pluginApi";
+import ScreenUtils from "src/utils/screen";
 
 interface IScenePreviewProps {
   isPortrait: boolean;
   image?: string;
   video?: string;
-  height?: number;
   soundActive: boolean;
   vttPath?: string;
   onScrubberClick?: (timestamp: number) => void;
@@ -46,7 +46,6 @@ interface IScenePreviewProps {
 export const ScenePreview: React.FC<IScenePreviewProps> = ({
   image,
   video,
-  height,
   isPortrait,
   soundActive,
   vttPath,
@@ -73,10 +72,7 @@ export const ScenePreview: React.FC<IScenePreviewProps> = ({
   }, [soundActive]);
 
   return (
-    <div
-      className={cx("scene-card-preview", { portrait: isPortrait })}
-      style={height ? { height: `${height}px` } : {}}
-    >
+    <div className={cx("scene-card-preview", { portrait: isPortrait })}>
       <img
         className="scene-card-preview-image"
         loading="lazy"
@@ -102,7 +98,6 @@ interface ISceneCardProps {
   scene: GQL.SlimSceneDataFragment;
   containerWidth?: number;
   previewHeight?: number;
-  setPreviewHeight?: React.Dispatch<React.SetStateAction<number | undefined>>;
   index?: number;
   queue?: SceneQueue;
   compact?: boolean;
@@ -451,7 +446,6 @@ const SceneCardImage = PatchComponent(
       <>
         <ScenePreview
           image={props.scene.paths.screenshot ?? undefined}
-          height={props.previewHeight}
           video={props.scene.paths.preview ?? undefined}
           isPortrait={isPortrait()}
           soundActive={configuration?.interface?.soundOnPreview ?? false}
@@ -497,33 +491,30 @@ export const SceneCard = PatchComponent(
       if (
         !props.containerWidth ||
         props.zoomIndex === undefined ||
-        !props.setPreviewHeight
+        ScreenUtils.isMobile()
       )
         return;
 
-      let containerPadding = 30;
-      let containerWidth = props.containerWidth - containerPadding;
       let zoomValue = props.zoomIndex;
-      let maxCardWidth: number;
-      let paddingOffset = 10;
+      let preferredCardWidth: number;
       switch (zoomValue) {
         case 0:
-          maxCardWidth = 240;
+          preferredCardWidth = 240;
           break;
         case 1:
-          maxCardWidth = 340;
+          preferredCardWidth = 340; // this value is intentionally higher than 320
           break;
         case 2:
-          maxCardWidth = 480;
+          preferredCardWidth = 480;
           break;
         case 3:
-          maxCardWidth = 640;
+          preferredCardWidth = 640;
       }
-      let maxElementsOnRow = Math.ceil(containerWidth / maxCardWidth!);
-      let fittedCardWidth = containerWidth / maxElementsOnRow - paddingOffset;
-      let imageHeight = (fittedCardWidth / 16) * 9;
+      let fittedCardWidth = calculateCardWidth(
+        props.containerWidth,
+        preferredCardWidth!
+      );
       setCardWidth(fittedCardWidth);
-      props.setPreviewHeight(imageHeight);
     }, [props, props.containerWidth, props.zoomIndex]);
 
     const cont = configuration?.interface.continuePlaylistDefault ?? false;
